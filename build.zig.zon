@@ -1,0 +1,22 @@
+.{
+    .name = .ada,
+    .version = "0.1.0",
+    .fingerprint = 0x8d7087686b27d542,
+    .minimum_zig_version = "0.17.0-dev.1252+e4b325c19",
+    .dependencies = .{
+        // Known-good pins verified by Bob on Zig master (see docs/PLAN.md §4).
+        .sokol = .{
+            .url = "git+https://github.com/floooh/sokol-zig.git#fc8dcc657ee7d5c9106c3c000d14be88b4ea87f9",
+            .hash = "sokol-0.1.0-pb1HKxrKNwAfEuu5wEOJo8yYNxmbsqa88hcjQ7A0NIYa",
+        },
+        .shdc = .{
+            .url = "git+https://github.com/floooh/sokol-tools-bin#6801e61ab7ea64dd9369ae9ff2f46d20c61fc655",
+            .hash = "sokolshdc-0.1.0-r2KZDj2ESgPeSsOrxWqONyemz4-250cFO8ZhXkEs4DrZ",
+        },
+    },
+    .paths = .{
+        "src",
+        "build.zig",
+        "build.zig.zon",
+    },
+}
