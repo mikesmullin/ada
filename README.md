@@ -1,10 +1,16 @@
 # Ada
 
-Always-on agentic desktop assistant with a visible presence: a glowing
-procedural orb (Zig + sokol) that reacts to what she hears (your voice)
-and what she says (hers). Inspired by Siri; built on the local stack:
+Always-on agentic desktop assistant with a visible presence: a procedural
+avatar (Zig + sokol) that reacts to what she hears (your voice) and what
+she says (hers). Inspired by Siri; built on the local stack:
 perception-voice (Whisper STT), presence-voice (Piper/Kokoro TTS),
 lm-studio (`google/gemma-4-e4b`), and agl-ai.
+
+<p align="center">
+  <img src="docs/screenshot-hud.png" width="420" alt="ada avatar --style hud, listening and speaking at once">
+  <img src="docs/screenshot-orb.png" width="236" alt="ada avatar (orb style), speaking">
+</p>
+<p align="center"><em>--style hud mid-conversation (outer bars: your voice · inner ring + core: hers · amber brackets: engaged) — and the default orb.</em></p>
 
 Design doc: [docs/PLAN.md](docs/PLAN.md) · wire spec: [docs/PROTOCOL.md](docs/PROTOCOL.md)
 
