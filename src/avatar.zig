@@ -46,6 +46,12 @@ const Targets = struct {
     connected: f32 = 1,
     user: AudioFeat = .{},
     ada: AudioFeat = .{},
+    /// nowSeconds() of the last TTS frame with audible content. The brain's
+    /// `speaking` state tracks request completion (OK = enqueued, playback
+    /// is async), so it goes false while she is still audibly talking —
+    /// the frames are the playback clock, and they open the speaking gate
+    /// directly (see frame()).
+    ada_last_audible: f64 = -10,
 };
 
 /// Render-thread-only smoothed copies of Targets.
@@ -293,6 +299,9 @@ fn applyFrame(f: *const ipc.FeatureFrame) void {
     feat.band = f.band;
     feat.vad = if (f.flags & ipc.FLAG_VAD != 0) 1 else 0;
     feat.live = true;
+    if (f.stream_id == ipc.STREAM_TTS and f.rms > 0.02) {
+        G.targets.ada_last_audible = nowSeconds();
+    }
 }
 
 fn zeroFeat(which: enum { user, ada }) void {
@@ -401,7 +410,12 @@ export fn frame() void {
         tgt.connected = G.targets.connected;
         tgt.user = G.targets.user;
         tgt.ada = G.targets.ada;
+        tgt.ada_last_audible = G.targets.ada_last_audible;
     }
+
+    // Her actual audio opens the speaking gate (playback truth beats the
+    // brain's request-completion state — see Targets.ada_last_audible).
+    if (now - tgt.ada_last_audible < 0.3) tgt.speaking = 1;
 
     if (G.opts.solo) soloDrive(&tgt, now);
 
