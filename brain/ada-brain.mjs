@@ -298,16 +298,36 @@ function loadActivities() {
 const activities = loadActivities();
 log(`activities: ${Object.keys(activities.apps).length} apps, ${Object.keys(activities.commands).length} commands`);
 
+// Run a tool command without ever throwing: a missing binary or non-zero
+// exit becomes a failure *string* the LLM can relay ("the desk lamp
+// didn't respond") instead of an exception that aborts the whole turn as
+// "Sorry, something went wrong" — which is what happened when govee
+// wasn't on the service PATH while openrgb was (partial success, spoken
+// as total failure).
+async function runCmd(cmd, args) {
+  try {
+    const child = spawn(cmd, args.map(String));
+    await child.promise;
+    return { ok: child.code === 0, out: (child.stdout + child.stderr).trim().slice(0, 200) };
+  } catch (e) {
+    return { ok: false, out: `${cmd}: ${e.message}` };
+  }
+}
+
 // Launcher-style commands may run long (apps, sessions): report started
 // rather than hanging the turn.
 async function shellTool(shellLine, timeoutMs = 10000) {
-  const child = spawn('bash', ['-c', shellLine]);
-  const timeout = new Promise((r) => setTimeout(() => r('TIMEOUT'), timeoutMs));
-  const result = await Promise.race([child.promise, timeout]);
-  if (result === 'TIMEOUT') return `started (still running): ${shellLine}`;
-  return child.code === 0
-    ? `ok: ${shellLine}${child.stdout ? ` — ${child.stdout.trim().slice(0, 200)}` : ''}`
-    : `failed (exit ${child.code}): ${shellLine} — ${(child.stderr || child.stdout).trim().slice(0, 200)}`;
+  try {
+    const child = spawn('bash', ['-c', shellLine]);
+    const timeout = new Promise((r) => setTimeout(() => r('TIMEOUT'), timeoutMs));
+    const result = await Promise.race([child.promise, timeout]);
+    if (result === 'TIMEOUT') return `started (still running): ${shellLine}`;
+    return child.code === 0
+      ? `ok: ${shellLine}${child.stdout ? ` — ${child.stdout.trim().slice(0, 200)}` : ''}`
+      : `failed (exit ${child.code}): ${shellLine} — ${(child.stderr || child.stdout).trim().slice(0, 200)}`;
+  } catch (e) {
+    return `failed: ${shellLine} — ${e.message}`;
+  }
 }
 
 function registerTools(agent) {
@@ -323,21 +343,18 @@ function registerTools(agent) {
   }, [], async (ctx, { power, r, g, b, brightness }) => {
     let result = '';
     if (typeof power === 'boolean') {
-      const child = spawn('govee', [power ? 'on' : 'off']);
-      await child.promise;
-      result += child.code === 0 ? `lamp power is now ${power ? 'on' : 'off'}. ` : `failed to set lamp power. `;
+      const res = await runCmd('govee', [power ? 'on' : 'off']);
+      result += res.ok ? `lamp power is now ${power ? 'on' : 'off'}. ` : `failed to set lamp power (${res.out}). `;
     }
     if (r !== undefined || g !== undefined || b !== undefined) {
       r = clamp(forceInt(r, 0), 0, 255); g = clamp(forceInt(g, 0), 0, 255); b = clamp(forceInt(b, 0), 0, 255);
-      const child = spawn('govee', ['rgb', r, g, b]);
-      await child.promise;
-      result += child.code === 0 ? `lamp color is now rgb(${r},${g},${b}). ` : `failed to set lamp color. `;
+      const res = await runCmd('govee', ['rgb', r, g, b]);
+      result += res.ok ? `lamp color is now rgb(${r},${g},${b}). ` : `failed to set lamp color (${res.out}). `;
     }
     if (brightness) {
       brightness = clamp(forceInt(brightness, 0), 0, 35);
-      const child = spawn('govee', ['brightness', brightness]);
-      await child.promise;
-      result += child.code === 0 ? `lamp brightness=${brightness}.` : `failed to set lamp brightness.`;
+      const res = await runCmd('govee', ['brightness', brightness]);
+      result += res.ok ? `lamp brightness=${brightness}.` : `failed to set lamp brightness (${res.out}).`;
     }
     return result || 'no lamp action requested.';
   });
@@ -348,12 +365,22 @@ function registerTools(agent) {
   }, ['color'], async (ctx, { color, brightness = 50 }) => {
     color = forceRx(/^[0-9A-Fa-f]{6}$/, color, '000000');
     brightness = clamp(forceInt(brightness, 0), 0, 50);
-    const child = spawn('openrgb', ['-d', '0', '--mode', 'static', '--color', color, '--brightness', brightness]);
-    await child.promise;
-    return child.code === 0
+    const res = await runCmd('openrgb', ['-d', '0', '--mode', 'static', '--color', color, '--brightness', brightness]);
+    return res.ok
       ? `PC light is now color=${color} brightness=${brightness}.`
-      : `failed to set PC light color.`;
+      : `failed to set PC light color (${res.out}).`;
   });
+
+  agent.Tool('current_time', 'get the current local date, time, and timezone', {},
+    [], async () => {
+      const now = new Date();
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const local = now.toLocaleString('en-US', {
+        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+        hour: 'numeric', minute: '2-digit', second: '2-digit', timeZoneName: 'short',
+      });
+      return `${local} (timezone ${tz}; ISO ${now.toISOString()})`;
+    });
 
   // -- mari activities -------------------------------------------------------
   const appNames = Object.keys(activities.apps);
