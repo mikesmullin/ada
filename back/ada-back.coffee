@@ -342,6 +342,48 @@ registerTools = (agent) ->
     else
       "failed to set PC light color (#{res.out})."
 
+  # -- media keys ------------------------------------------------------------
+  # MPRIS via playerctl (what the hardware media keys map to on any desktop
+  # Linux; browsers like Zen/Firefox expose their playing tab over MPRIS).
+  # With several players around, transport targets the one actually
+  # Playing (else the first), so "pause the music" hits the right tab.
+  pickPlayer = ->
+    res = await runCmd 'playerctl', ['-l']
+    return null unless res.ok and res.out
+    players = res.out.split('\n').filter Boolean
+    paused = null
+    for p in players
+      st = await runCmd 'playerctl', ['-p', p, 'status']
+      continue unless st.ok
+      status = st.out.trim()
+      return p if status is 'Playing'
+      paused ?= p if status is 'Paused' # resume targets what was paused, not player #1
+    paused ? players[0] ? null
+
+  agent.Tool 'media_control',
+    'control the currently playing media (music or video in the browser or ' +
+    'any media player: pause, play, skip tracks) and/or set the system ' +
+    'output volume — the equivalent of the keyboard media keys.',
+    action: { type: 'string', enum: ['play', 'pause', 'play-pause', 'next', 'previous', 'stop'], description: 'transport action for the active media player. omit when only changing volume.' }
+    volume: { type: 'integer', description: 'set system output volume as a percent, 0-100. omit when only controlling playback.' }
+  , [], (ctx, { action, volume }) ->
+    parts = []
+    if action
+      player = await pickPlayer()
+      if player
+        res = await runCmd 'playerctl', ['-p', player, action]
+        who = player.replace /\..*$/, '' # "firefox.instance_1_31" -> "firefox"
+        parts.push if res.ok then "media #{action} ok (#{who})." \
+                    else "media #{action} failed (#{res.out})."
+      else
+        parts.push 'no media player is running.'
+    if volume?
+      v = clamp forceInt(volume, 0), 0, 100
+      res = await runCmd 'wpctl', ['set-volume', '@DEFAULT_AUDIO_SINK@', "#{v}%"]
+      parts.push if res.ok then "system volume set to #{v} percent." \
+                  else "volume change failed (#{res.out})."
+    parts.join(' ') or 'no media action requested (specify action and/or volume).'
+
   agent.Tool 'current_time',
     'get the current local date, time, and timezone', {}, [], ->
       now = new Date()
@@ -411,8 +453,9 @@ BASE_PROMPT = '''
   strip (pc_light_color). When the user says "lights" (plural) or does
   not name a specific light, apply the request to BOTH lights. Call each
   necessary tool at most once. You can also launch desktop apps by their
-  program name (run_application, e.g. audacity, discord) and run
-  predefined activity commands (run_activity_command).
+  program name (run_application, e.g. audacity, discord), run
+  predefined activity commands (run_activity_command), and control media
+  playback and system volume like keyboard media keys (media_control).
   If the user is just talking, just talk back — do not use tools.
   '''
 
