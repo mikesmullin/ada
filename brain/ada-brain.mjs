@@ -173,10 +173,13 @@ class Speaker {
   queue = [];
   pumping = false;
 
-  enqueue(text, turn) {
+  // schedule: 'enqueue' (default — sentences of one reply queue gapless on
+  // the daemon's FIFO speech channel) or 'interrupt' (silence anything
+  // already playing first — a new turn's opening sentence).
+  enqueue(text, turn, schedule = 'enqueue') {
     const clean = text.replace(/[\t\n]+/g, ' ').trim();
     if (!clean) return;
-    this.queue.push({ text: clean, turn });
+    this.queue.push({ text: clean, turn, schedule });
     this.pump();
   }
 
@@ -187,14 +190,14 @@ class Speaker {
     this.pumping = true;
     try {
       while (this.queue.length) {
-        const { text, turn } = this.queue.shift();
+        const { text, turn, schedule } = this.queue.shift();
         if (turn?.cancelled) continue;
         setState({ speaking: true });
         const t0 = performance.now();
         try {
-          await speakOnce(CFG.voice, text);
+          await speakOnce(CFG.voice, text, schedule);
           turn?.lat && (turn.lat.lastAudioDone = performance.now());
-          log(`spoke (${Math.round(performance.now() - t0)}ms): ${text}`);
+          log(`spoke [${schedule}] (${Math.round(performance.now() - t0)}ms): ${text}`);
         } catch (e) {
           log(`speak failed: ${e.message} — "${text}"`);
         }
@@ -210,15 +213,16 @@ class Speaker {
   }
 }
 
-function speakOnce(preset, text) {
+function speakOnce(preset, text, schedule = 'enqueue') {
   return new Promise((resolve, reject) => {
     let buf = '';
     let settled = false;
     const done = (fn, arg) => { if (!settled) { settled = true; fn(arg); } };
     const sock = net.connect(CFG.presenceSock, () => {
-      // presence-voice line protocol: preset \t speaker \t effects \t text
-      // (empty speaker/effects = daemon defaults)
-      sock.write(`${preset}\t\t\t${text}\n`);
+      // presence-voice line protocol:
+      // preset \t speaker \t effects \t schedule \t text
+      // (empty speaker/effects = daemon defaults; schedule is required)
+      sock.write(`${preset}\t\t\t${schedule}\t${text}\n`);
     });
     sock.on('data', (d) => {
       buf += d.toString();
@@ -230,6 +234,12 @@ function speakOnce(preset, text) {
     sock.on('error', (e) => done(reject, e));
     sock.on('close', () => done(reject, new Error('presence-voice closed early')));
   });
+}
+
+/// The daemon's stop primitive: interrupt with empty text silences any
+/// playing/queued speech without saying anything.
+function stopSpeech() {
+  speakOnce(CFG.voice, '', 'interrupt').catch((e) => log(`stop failed: ${e.message}`));
 }
 
 const speaker = new Speaker();
@@ -401,8 +411,13 @@ function renderPrompt(text) {
 }
 
 async function runTurn(utt, gate) {
-  // barge-in: a new passing utterance cancels whatever is pending/speaking
-  if (currentTurn) currentTurn.cancelled = true;
+  // barge-in: a new passing utterance cancels whatever is pending/speaking —
+  // clear our queue AND silence the daemon immediately (don't wait for the
+  // reply's first sentence to interrupt)
+  if (currentTurn) {
+    currentTurn.cancelled = true;
+    stopSpeech();
+  }
   speaker.clear();
 
   const turn = {
@@ -426,8 +441,11 @@ async function runTurn(utt, gate) {
 
   const splitter = new SentenceSplitter((sentence) => {
     if (turn.cancelled) return;
-    if (turn.lat.firstSentence === null) turn.lat.firstSentence = performance.now();
-    speaker.enqueue(sentence, turn);
+    // opening sentence interrupts (kills any stale speech a cancelled turn
+    // managed to get in flight); the rest of the reply enqueues gapless
+    const first = turn.lat.firstSentence === null;
+    if (first) turn.lat.firstSentence = performance.now();
+    speaker.enqueue(sentence, turn, first ? 'interrupt' : 'enqueue');
   });
 
   try {
@@ -482,6 +500,7 @@ function cancelAll(reason) {
     currentTurn = null;
   }
   speaker.clear();
+  stopSpeech(); // silence anything already playing, whisper-style cancel
   sfx('click-off');
   convWindowUntil = 0;
   setState({ thinking: false, active: pttDown });

@@ -62,13 +62,28 @@ One channel per connection; binary and JSON framing never mix.
 ## 3. presence-voice (existing socket, new `subscribe` line)
 
 Socket: `/tmp/presence-voice.sock`.
-Existing protocol (as of the current running build): one text line per
-request, `preset\tspeaker\teffects\ttext\n` — speaker/effects may be empty
-for daemon defaults — replied with `OK\n` / `ERR msg\n`. This remains the
-brain's speak path in v1; the `OK` arrives after the daemon hands the
-audio to PulseAudio. (Caveat observed live: parse failures close the
-connection without an `ERR` line — flagged to the presence-voice session
-in /workspace/voice/tmp/ADA_FEATURE_FRAMES_REQUEST.md.)
+Speak protocol: one text line per request,
+`preset\tspeaker\teffects\tschedule\ttext\n` — speaker/effects may be
+empty for daemon defaults — replied with `OK\n` / `ERR msg\n`. `OK`
+arrives once the utterance is *enqueued* on the daemon's mixer (playback
+is asynchronous; the levels stream in §1 is the playback-truth signal).
+
+`schedule` is **required and explicit** — utterances collide, and the
+caller must say which semantics it wants:
+
+- `enqueue` — queue behind whatever speech is already playing. The
+  daemon's speech channel is a strict FIFO, so consecutive enqueues play
+  gapless in order (the brain's per-sentence streaming path).
+- `interrupt` — immediately silence any playing/queued speech, then speak.
+  With **empty text** this is the stop primitive: silence, `OK`, nothing
+  spoken (the brain's click-cancel and barge-in path).
+
+The brain schedules a reply's opening sentence as `interrupt` and the
+rest as `enqueue`. HTTP `POST /speak` mirrors this with a required
+`"schedule"` JSON field for `mode=play`.
+
+(Caveat observed live: line-format parse failures close the connection
+without an `ERR` line.)
 
 New request lines — same line framing:
 
