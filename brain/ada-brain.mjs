@@ -13,9 +13,35 @@
 import Agent from 'agl-ai';
 import yaml from 'js-yaml';
 import net from 'node:net';
-import { existsSync, readFileSync, readdirSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'fs';
 import { spawn } from './lib/spawn.mjs';
 import { clamp, forceInt, forceRx } from './lib/validate.mjs';
+
+// Single-instance lock: a second brain would steal the avatar socket and
+// double-run every turn. Pidfile + liveness check (no flock in JS): a
+// stale file from a crash is detected via kill(pid, 0) and taken over.
+const LOCK_PATH = new URL('../.brain.lock', import.meta.url).pathname;
+
+function acquireInstanceLock() {
+  try {
+    const pid = Number(readFileSync(LOCK_PATH, 'utf8').trim());
+    if (pid && pid !== process.pid) {
+      try {
+        process.kill(pid, 0); // throws if not running
+        console.error(`error: another ada-brain is already running (pid ${pid}, lock: ${LOCK_PATH})`);
+        console.error('       stop it first: systemctl --user stop ada-brain');
+        process.exit(1);
+      } catch { /* stale lock from a dead process — take over */ }
+    }
+  } catch { /* no lock file */ }
+  writeFileSync(LOCK_PATH, `${process.pid}\n`);
+}
+
+function releaseInstanceLock() {
+  try {
+    if (Number(readFileSync(LOCK_PATH, 'utf8').trim()) === process.pid) unlinkSync(LOCK_PATH);
+  } catch { /* already gone */ }
+}
 
 const CFG = {
   brainSock: process.env.ADA_BRAIN_SOCK
@@ -538,6 +564,7 @@ function connectWords(isRetry = false) {
 // startup
 
 async function main() {
+  acquireInstanceLock();
   Agent.default.concurrency = 4; // let a barge-in turn start while a cancelled one drains
 
   // fail fast if presence-voice isn't up (plan §9.3); systemd retries us.
@@ -576,8 +603,10 @@ async function main() {
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
     try { if (existsSync(CFG.brainSock)) unlinkSync(CFG.brainSock); } catch {}
+    releaseInstanceLock();
     process.exit(0);
   });
 }
+process.on('exit', releaseInstanceLock);
 
 await main();

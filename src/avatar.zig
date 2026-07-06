@@ -91,6 +91,47 @@ const G = struct {
 };
 
 // ---------------------------------------------------------------------------
+// Single-instance lock: one orb per machine. flock() is held for the
+// process lifetime and released by the kernel on ANY exit (crash included),
+// so there are no stale-lock states to clean up. Anchored to the repo
+// checkout like the rest of this ecosystem's fixed paths.
+
+const LOCK_PATH = "/workspace/ada/.avatar.lock";
+
+extern "c" fn flock(fd: c_int, operation: c_int) c_int;
+const LOCK_EX: c_int = 2;
+const LOCK_NB: c_int = 4;
+
+fn acquireInstanceLock(io: std.Io, log: *std.Io.Writer) !void {
+    const file = std.Io.Dir.cwd().createFile(io, LOCK_PATH, .{
+        .read = true,
+        .truncate = false,
+    }) catch |err| {
+        try log.print("error: cannot open instance lock {s}: {t}\n", .{ LOCK_PATH, err });
+        try log.flush();
+        std.process.exit(1);
+    };
+    if (flock(file.handle, LOCK_EX | LOCK_NB) != 0) {
+        var pid_buf: [32]u8 = undefined;
+        var reader = file.reader(io, &pid_buf);
+        const other = reader.interface.takeDelimiterExclusive('\n') catch "";
+        try log.print(
+            "error: another ada avatar is already running{s}{s} (lock: {s})\n",
+            .{ if (other.len > 0) " with pid " else "", other, LOCK_PATH },
+        );
+        try log.flush();
+        std.process.exit(1);
+    }
+    // lock held: record our pid for diagnostics and keep the fd open forever
+    var wbuf: [32]u8 = undefined;
+    var writer = file.writer(io, &wbuf);
+    writer.interface.print("{d}\n", .{std.c.getpid()}) catch {};
+    writer.interface.flush() catch {};
+    // `file` intentionally never closed — the lock lives exactly as long
+    // as this process does.
+}
+
+// ---------------------------------------------------------------------------
 // X11: set WM_CLASS = "ada" so awesome-WM client rules can target the window
 // (floating/ontop/borderless/placement all live in rc.lua — plan §4).
 
@@ -510,6 +551,8 @@ pub fn run(io: std.Io, alloc: std.mem.Allocator, opts: Options, log: *std.Io.Wri
     G.io = io;
     G.opts = opts;
     G.start_ts = std.Io.Clock.Timestamp.now(io, .awake);
+
+    try acquireInstanceLock(io, log);
 
     if (!opts.solo) {
         // fail fast, with an actionable message per missing service (§9.3)
