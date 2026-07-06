@@ -412,7 +412,22 @@ function registerTools(agent) {
 // ---------------------------------------------------------------------------
 // Turn engine
 
-const SYSTEM_PROMPT =
+// SOUL.md: standing knowledge (who Mike is, preferences, facts) appended
+// to the system prompt at startup — edit the file, restart the brain.
+const SOUL_PATH = process.env.ADA_SOUL || new URL('../SOUL.md', import.meta.url).pathname;
+
+function loadSoul() {
+  try {
+    const soul = readFileSync(SOUL_PATH, 'utf8').trim();
+    log(`soul loaded: ${SOUL_PATH} (${soul.length} chars)`);
+    return `\n\nStanding knowledge (from your SOUL.md — treat as true and current):\n${soul}`;
+  } catch {
+    log(`no soul file at ${SOUL_PATH}`);
+    return '';
+  }
+}
+
+const BASE_PROMPT =
   'You are Ada, a spoken-voice desktop assistant. Your replies are read ' +
   'aloud by a text-to-speech engine, so: be conversational and concise ' +
   '(usually one or two short sentences), never use markdown, bullet ' +
@@ -426,6 +441,8 @@ const SYSTEM_PROMPT =
   'necessary tool at most once. You can also launch desktop apps ' +
   '(launch_app) and run predefined activity commands (run_activity_command).\n' +
   'If the user is just talking, just talk back — do not use tools.';
+
+const SYSTEM_PROMPT = BASE_PROMPT + loadSoul();
 
 const history = [];
 let currentTurn = null;
