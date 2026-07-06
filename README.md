@@ -57,6 +57,7 @@ interface, deployed), `voice serve` (presence-voice v2), lm-studio on
 | `ADA_WAKE` | `\bada\b` |
 | `ADA_CONV_WINDOW_MS` | `8000` |
 | `ADA_BRAIN_SOCK` | `$XDG_RUNTIME_DIR/ada-brain.sock` |
+| `ADA_SOUL` | `SOUL.md` (repo root) — standing knowledge loaded into her system prompt at startup |
 | `ADA_SELFTEST` | unset — set to a phrase to run one synthetic turn (no mic) |
 
 ## Status / deferred
