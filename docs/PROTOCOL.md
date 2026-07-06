@@ -62,19 +62,29 @@ One channel per connection; binary and JSON framing never mix.
 ## 3. presence-voice (existing socket, new `subscribe` line)
 
 Socket: `/tmp/presence-voice.sock`.
-Existing protocol: one text line per request, `preset\ttext\n` → `OK\n` /
-`ERR msg\n` (unchanged, and remains the brain's speak path in v1 — the
-`OK` arrives after playback completes, which doubles as the speak-end
-signal for the caller).
+Existing protocol (as of the current running build): one text line per
+request, `preset\tspeaker\teffects\ttext\n` — speaker/effects may be empty
+for daemon defaults — replied with `OK\n` / `ERR msg\n`. This remains the
+brain's speak path in v1; the `OK` arrives after the daemon hands the
+audio to PulseAudio. (Caveat observed live: parse failures close the
+connection without an `ERR` line — flagged to the presence-voice session
+in /workspace/voice/tmp/ADA_FEATURE_FRAMES_REQUEST.md.)
 
 New request lines — same line framing:
 
-- `subscribe\tlevels\n` → connection becomes a push stream of binary
-  FeatureFrames (§1), stream_id=1, ~60 Hz, computed from the PCM chunk the
-  daemon is *about to write* to PulseAudio (aligned to the playback clock
-  by chunked writes). stream-start/stream-end flags bracket each utterance.
-  Consumed by the avatar.
-- `subscribe\tevents\n` → connection becomes a push stream of JSON lines:
+**Status: requested, not yet implemented** (milestone 5 — assigned to the
+presence-voice session; request doc with implementation sketch at
+/workspace/voice/tmp/ADA_FEATURE_FRAMES_REQUEST.md). The avatar treats
+this stream as optional: until it exists, the orb synthesizes a speaking
+pulse from the brain's `speaking` state and auto-upgrades when the daemon
+starts answering.
+
+- `subscribe\tlevels\n` → reply `OK\n`, then the connection becomes a push
+  stream of binary FeatureFrames (§1), stream_id=1, ~60 Hz, computed from
+  the PCM chunk the daemon is *about to write* to PulseAudio (aligned to
+  the playback clock by chunked writes). stream-start/stream-end flags
+  bracket each utterance. Consumed by the avatar.
+- `subscribe\tevents\n` → reply `OK\n`, then a push stream of JSON lines:
 
 ```json
 {"ev":"speak-start","text":"..."}

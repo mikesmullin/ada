@@ -1,0 +1,29 @@
+-- awesome-WM client rules for the Ada orb (docs/PLAN.md §4).
+-- The avatar sets WM_CLASS = "ada"; everything "overlay" about the window
+-- lives here — the app itself has zero window-chrome code.
+--
+-- Add to your rc.lua's awful.rules.rules table:
+
+{
+    rule = { class = "ada" },
+    properties = {
+        floating = true,
+        ontop = true,
+        sticky = true,
+        skip_taskbar = true,
+        border_width = 0,
+        titlebars_enabled = false,
+        -- biggest screen by default (plan §9.7); adjust to taste
+        screen = function() return screen.primary end,
+        placement = function(c)
+            -- bottom-right corner with a small offset
+            return awful.placement.bottom_right(c, {
+                honor_workarea = true,
+                margins = { right = 24, bottom = 24 },
+            })
+        end,
+    },
+},
+
+-- Placement/screen overrides belong here, not in the app (plan §9.7).
+-- awesome's winkey-drag already moves the window when you want it elsewhere.

@@ -33,6 +33,7 @@ const AudioFeat = struct {
     rms: f32 = 0,
     band: [4]f32 = .{ 0, 0, 0, 0 },
     vad: f32 = 0,
+    live: bool = false, // real frames flowing (vs synthesized fallback)
 };
 
 /// Written by socket threads under `mu`, copied once per frame by render.
@@ -250,6 +251,7 @@ fn applyFrame(f: *const ipc.FeatureFrame) void {
     feat.rms = f.rms;
     feat.band = f.band;
     feat.vad = if (f.flags & ipc.FLAG_VAD != 0) 1 else 0;
+    feat.live = true;
 }
 
 fn zeroFeat(which: enum { user, ada }) void {
@@ -361,6 +363,20 @@ export fn frame() void {
     }
 
     if (G.opts.solo) soloDrive(&tgt, now);
+
+    // Until presence-voice grows its feature-frame stream (milestone 5, in
+    // Bob's court — see docs/PLAN.md §5a), synthesize a speaking pulse from
+    // the brain's speaking state so the core still animates with her voice.
+    if (!tgt.ada.live and tgt.speaking > 0.5) {
+        const t: f32 = @floatCast(now);
+        tgt.ada.rms = 0.35 + 0.3 * @sin(t * 3.1) + 0.15 * @sin(t * 9.7);
+        tgt.ada.band = .{
+            0.4 + 0.3 * @sin(t * 2.3),
+            0.35 + 0.25 * @sin(t * 4.1 + 1.5),
+            0.3 + 0.25 * @sin(t * 6.7 + 0.5),
+            0.25 + 0.2 * @sin(t * 11.3 + 2.5),
+        };
+    }
 
     const s = &G.smooth;
     s.listening = approach(s.listening, tgt.listening, dt, 0.15, 0.4);
@@ -516,19 +532,23 @@ pub fn run(io: std.Io, alloc: std.mem.Allocator, opts: Options, log: *std.Io.Wri
             try log.flush();
             std.process.exit(1);
         };
-        const pres = connectPresenceLevels() catch {
+        // Presence levels are OPTIONAL for now: the `subscribe levels`
+        // interface is milestone 5 (presence-voice side, Bob's). Until it
+        // lands, the orb synthesizes a speaking pulse from state events; the
+        // thread keeps retrying and picks the real stream up automatically.
+        const pres: ?std.Io.net.Stream = connectPresenceLevels() catch blk: {
             try log.print(
-                "error: presence-voice levels stream is not reachable (unix://{s})\n" ++
-                    "       start it: systemctl --user start voice\n",
+                "warning: presence-voice levels stream unavailable (unix://{s})\n" ++
+                    "         speaking pulse will be synthesized until `subscribe levels` lands\n",
                 .{opts.presence_sock},
             );
             try log.flush();
-            std.process.exit(1);
+            break :blk null;
         };
 
         _ = try std.Thread.spawn(.{}, brainThread, .{});
         _ = try std.Thread.spawn(.{}, perceptionThread, .{@as(?std.Io.net.Stream, perc)});
-        _ = try std.Thread.spawn(.{}, presenceThread, .{@as(?std.Io.net.Stream, pres)});
+        _ = try std.Thread.spawn(.{}, presenceThread, .{pres});
     }
 
     sapp.run(.{

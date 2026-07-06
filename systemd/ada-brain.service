@@ -1,0 +1,26 @@
+# Ada brain — persistent conversation loop (Bun microagent).
+#
+# Install:
+#   cp systemd/ada-brain.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now ada-brain
+#
+# Fail-fast by design (docs/PLAN.md §9.3): exits if perception-voice or
+# presence-voice are unreachable; Restart=on-failure brings it back once
+# they are. Wants= orders it after them when they're enabled.
+
+[Unit]
+Description=Ada Brain - conversation loop
+Wants=perception-voice.service voice.service
+After=perception-voice.service voice.service
+
+[Service]
+Type=simple
+WorkingDirectory=/workspace/ada/brain
+ExecStart=%h/.bun/bin/bun ada-brain.mjs
+Restart=on-failure
+RestartSec=3
+Environment=PULSE_SERVER=unix:/run/user/%U/pulse/native
+
+[Install]
+WantedBy=default.target
