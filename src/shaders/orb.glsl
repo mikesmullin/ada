@@ -39,10 +39,13 @@ float noise(vec2 p) {
                mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
 }
 
+// 6 octaves: the original 4 were tuned for a ~160px orb and read as soft
+// upscaled blobs on a large window; the extra octaves carry fine detail
+// that MSAA simply averages away at small sizes. Still trivially cheap.
 float fbm(vec2 p) {
     float v = 0.0;
     float a = 0.5;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 6; i++) {
         v += a * noise(p);
         p = p * 2.03 + vec2(17.3, 9.1);
         a *= 0.5;
@@ -110,9 +113,11 @@ void main() {
                     * (w_idle * 0.35 + 0.15)
                     + 0.9 * a_rms * w_speak
                     + 0.4 * u_rms * w_active;
-    // inner texture: darker fbm veins so the surface reads as liquid
+    // inner texture: darker fbm veins so the surface reads as liquid, plus
+    // a fine high-frequency layer that keeps the surface crisp fullscreen
     float veins = fbm(np * 5.0 + vec2(0.0, t * 0.35));
-    vec3 core_out = core_col * core * core_glow * (0.75 + 0.5 * veins);
+    float grain = fbm(np * 17.0 - vec2(t * 0.12, t * 0.21));
+    vec3 core_out = core_col * core * core_glow * (0.68 + 0.45 * veins + 0.22 * grain);
 
     // ---- halo: your voice lives here (outer, both passive + active) ---
     float halo_falloff = exp(-max(r - radius, 0.0) * 7.0);

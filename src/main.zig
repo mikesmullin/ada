@@ -19,7 +19,7 @@ const HELP =
     \\  --solo                   no services: keyboard-driven states
     \\                           (1 idle, 2 listening, 3 active, 4 thinking,
     \\                            5 speaking, space pulse, q/esc quit)
-    \\  --size N                 window size in px (default 200)
+    \\  --size N                 window size in px (default 320)
     \\  --brain-sock PATH        default $XDG_RUNTIME_DIR/ada-brain.sock
     \\  --perception-sock PATH   default /workspace/perception-voice/perception.sock
     \\  --presence-sock PATH     default /tmp/presence-voice.sock

@@ -26,7 +26,7 @@ pub const Options = struct {
     brain_sock: []const u8,
     perception_sock: []const u8,
     presence_sock: []const u8,
-    size: i32 = 200,
+    size: i32 = 320,
 };
 
 const AudioFeat = struct {
@@ -649,6 +649,7 @@ pub fn run(io: std.Io, alloc: std.mem.Allocator, opts: Options, log: *std.Io.Wri
         .width = opts.size,
         .height = opts.size,
         .sample_count = 4,
+        .high_dpi = true, // full-res framebuffer on scaled displays
         .window_title = "ada",
         .logger = .{ .func = slog.func },
     });
