@@ -27,7 +27,8 @@ Design doc: [docs/PLAN.md](docs/PLAN.md) · wire spec: [docs/PROTOCOL.md](docs/P
 zig build                        # → zig-out/bin/ada
 systemctl --user start ada-brain # or: cd brain && bun ada-brain.mjs
 ada avatar                       # the orb (fails fast if services are down)
-ada avatar --solo                # orb alone: 1-5 toggle states, space pulse
+ada avatar --style hud           # alt style: holographic reticle + radial spectrums
+ada avatar --solo                # no services: 1-5 toggle states, space pulse
 ```
 
 Orb input: **hold left button = push-to-talk**, short click = cancel,
