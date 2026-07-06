@@ -17,7 +17,7 @@ After=perception-voice.service voice.service
 [Service]
 Type=simple
 WorkingDirectory=/workspace/ada/back
-ExecStart=%h/.bun/bin/bun ada-back.mjs
+ExecStart=%h/.bun/bin/bun ada-back.coffee
 Restart=on-failure
 RestartSec=3
 Environment=PULSE_SERVER=unix:/run/user/%U/pulse/native

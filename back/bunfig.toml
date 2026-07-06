@@ -1,0 +1,3 @@
+# Lets Bun run .coffee files natively (bun ada-back.coffee).
+# bunfig.toml is read from the working directory — run from back/.
+preload = ["bun-coffeescript/register"]

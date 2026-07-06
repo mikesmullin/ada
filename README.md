@@ -20,7 +20,7 @@ Design doc: [docs/PLAN.md](docs/PLAN.md) · wire spec: [docs/PROTOCOL.md](docs/P
   (idle/listening/active/thinking/speaking), your voice's spectral bands on
   the halo, her voice on the core. `WM_CLASS = "ada"` so awesome-WM rules
   own placement ([docs/rc.lua.example](docs/rc.lua.example)).
-- **`back/ada-back.mjs`** (Bun + agl-ai) — the conversation loop:
+- **`back/ada-back.coffee`** (Bun CoffeeScript + agl-ai) — the conversation loop:
   perception-voice `subscribe words` push stream (partials + finals) →
   activation gate → streamed LLM turn → per-sentence TTS. Tools:
   conversation, home lights (govee/openrgb), mari activities (apps +
@@ -30,7 +30,7 @@ Design doc: [docs/PLAN.md](docs/PLAN.md) · wire spec: [docs/PROTOCOL.md](docs/P
 
 ```
 zig build                        # → zig-out/bin/ada
-systemctl --user start ada-back # or: cd back && bun ada-back.mjs
+systemctl --user start ada-back # or: cd back && bun ada-back.coffee
 ada avatar                       # the orb (fails fast if services are down)
 ada avatar --style hud           # alt style: holographic reticle + radial spectrums
 ada avatar --solo                # no services: 1-5 toggle states, space pulse
