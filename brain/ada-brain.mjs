@@ -382,17 +382,27 @@ function registerTools(agent) {
       return `${local} (timezone ${tz}; ISO ${now.toISOString()})`;
     });
 
-  // -- mari activities -------------------------------------------------------
+  // -- app launching ---------------------------------------------------------
+  // Open-ended but shell-safe (mari's `!` SHELL-mode semantics): the app
+  // name must be one bare token — no spaces, slashes, or shell metachars —
+  // passed as a single argv to ~/launch.sh, which nohup-execs it as a
+  // program name. Nothing to inject into and no arguments possible, so the
+  // worst case is launching some argument-less program by name.
   const appNames = Object.keys(activities.apps);
-  if (appNames.length) {
-    agent.Tool('launch_app', 'launch a desktop application by name', {
-      app: { type: 'string', enum: appNames, description: `one of: ${appNames.join(', ')}` },
-    }, ['app'], async (ctx, { app }) => {
-      const line = activities.apps[app];
-      if (!line) return `unknown app: ${app}`;
-      return shellTool(line, 5000);
-    });
-  }
+  agent.Tool('run_application',
+    'launch a desktop application by its program name (as found on PATH), ' +
+    'e.g. audacity, discord, zen-browser. Use the plain lowercase binary ' +
+    'name, a single word.' +
+    (appNames.length ? ` Known favorites: ${appNames.join(', ')}.` : ''), {
+    app: { type: 'string', description: 'program name: one word, lowercase, no spaces or paths' },
+  }, ['app'], async (ctx, { app }) => {
+    const name = String(app ?? '').trim();
+    if (!/^[A-Za-z0-9._+-]{1,64}$/.test(name)) {
+      return `refused: "${name}" is not a plain program name (one word, no spaces or paths)`;
+    }
+    const res = await runCmd(`${process.env.HOME}/launch.sh`, [name]);
+    return res.ok ? `launched ${name}.` : `failed to launch ${name} (${res.out})`;
+  });
 
   const cmdIds = Object.keys(activities.commands);
   if (cmdIds.length) {
@@ -438,8 +448,9 @@ const BASE_PROMPT =
   'controllable lights: the desk lamp (desk_light) and the PC tower LED ' +
   'strip (pc_light_color). When the user says "lights" (plural) or does ' +
   'not name a specific light, apply the request to BOTH lights. Call each ' +
-  'necessary tool at most once. You can also launch desktop apps ' +
-  '(launch_app) and run predefined activity commands (run_activity_command).\n' +
+  'necessary tool at most once. You can also launch desktop apps by their ' +
+  'program name (run_application, e.g. audacity, discord) and run ' +
+  'predefined activity commands (run_activity_command).\n' +
   'If the user is just talking, just talk back — do not use tools.';
 
 const SYSTEM_PROMPT = BASE_PROMPT + loadSoul();
