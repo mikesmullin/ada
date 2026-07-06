@@ -72,12 +72,11 @@ in /workspace/voice/tmp/ADA_FEATURE_FRAMES_REQUEST.md.)
 
 New request lines — same line framing:
 
-**Status: requested, not yet implemented** (milestone 5 — assigned to the
-presence-voice session; request doc with implementation sketch at
-/workspace/voice/tmp/ADA_FEATURE_FRAMES_REQUEST.md). The avatar treats
-this stream as optional: until it exists, the orb synthesizes a speaking
-pulse from the brain's `speaking` state and auto-upgrades when the daemon
-starts answering.
+**Status: implemented** (presence-voice commit `8863c4e`,
+`src/audio/feature_tap.zig` — frames are computed in the sokol_audio
+stream callback, i.e. the playback clock, so they align with what the
+ears hear). The avatar still treats the stream as optional and falls back
+to a synthesized speaking pulse if the daemon is old or unreachable.
 
 - `subscribe\tlevels\n` → reply `OK\n`, then the connection becomes a push
   stream of binary FeatureFrames (§1), stream_id=1, ~60 Hz, computed from
