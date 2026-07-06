@@ -158,5 +158,6 @@ identifiable, including overlapped:
   fields, unless every style + avatar.zig are updated together.
 - Preserve every signal listed above — Mike explicitly wants the full
   set of overlapping state animations in all styles.
-- Keep `orb` the default; new styles ship behind `--style`.
+- `hud` is the default style (Mike's pick); new styles ship behind
+  `--style` until he promotes one.
 - One commit per style, screenshots verified before claiming it works.

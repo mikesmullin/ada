@@ -1,0 +1,21 @@
+{
+  "name": "mcp-zen-extension",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/background.js",
+  "scripts": {
+    "build": "esbuild background.ts --bundle --outfile=dist/background.js --loader:.yaml=text && esbuild options.ts --bundle --outfile=dist/options.js --loader:.yaml=text"
+  },
+  "license": "MIT",
+  "description": "Zen/Firefox extension that lets the mcp-zen MCP server remote-control this browser",
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@mcp-zen/common": "*",
+    "@types/firefox-webext-browser": "^120.0.4",
+    "@types/js-yaml": "^4.0.9",
+    "esbuild": "^0.25.1",
+    "typescript": "~5.7.3"
+  }
+}

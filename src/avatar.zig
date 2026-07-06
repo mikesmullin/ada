@@ -32,7 +32,7 @@ pub const Options = struct {
     perception_sock: []const u8,
     presence_sock: []const u8,
     size: i32 = 320,
-    style: Style = .orb,
+    style: Style = .hud,
 };
 
 const AudioFeat = struct {

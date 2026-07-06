@@ -1,0 +1,14 @@
+{
+  "manifest_version": 2,
+  "name": "mcp-zen",
+  "version": "0.1.0",
+  "description": "Lets a local mcp-zen MCP server remote-control this browser (tabs, navigation, page interaction).",
+  "permissions": ["tabs", "storage"],
+  "optional_permissions": ["<all_urls>"],
+  "background": {
+    "scripts": ["dist/background.js"]
+  },
+  "options_ui": {
+    "page": "options.html"
+  }
+}

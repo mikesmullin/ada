@@ -19,6 +19,7 @@ import net from 'node:net'
 import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'fs'
 import { spawn } from './lib/spawn.coffee'
 import { clamp, forceInt, forceRx } from './lib/validate.coffee'
+import { initBrowserAgent, runBrowserAgent } from './ada-browser.coffee'
 
 # ---------------------------------------------------------------------------
 # Single-instance lock: a second back would steal the avatar socket and
@@ -425,6 +426,18 @@ registerTools = (agent) ->
       return "unknown command: #{id}" unless line
       shellTool line
 
+  # -- browser control, delegated to the ada-browser sub-agent ---------------
+  agent.Tool 'control_browser',
+    'Delegate a task to a specialized sub-agent that can see and control my ' +
+    'web browser: open/navigate/close tabs, read a page, click, fill in ' +
+    'forms, scroll, screenshot, wait for content, run JavaScript. Give it ' +
+    'one clear task in plain English (e.g. "open chewy.com and tell me my ' +
+    'most recent order"); it figures out and performs whatever browser ' +
+    'steps are needed and reports back what it found or did.',
+    task: { type: 'string', description: 'the browser task to perform, in plain English' }
+  , ['task'], (ctx, { task }) ->
+    await runBrowserAgent task
+
 # ---------------------------------------------------------------------------
 # Turn engine
 
@@ -456,6 +469,10 @@ BASE_PROMPT = '''
   program name (run_application, e.g. audacity, discord), run
   predefined activity commands (run_activity_command), and control media
   playback and system volume like keyboard media keys (media_control).
+  If asked to look something up or do something on a website, delegate the
+  whole task to control_browser in one call (it can see and drive my
+  actual browser: navigate, read pages, click, fill forms) rather than
+  trying to guess at browser tools yourself.
   If the user is just talking, just talk back — do not use tools.
   '''
 
@@ -618,7 +635,11 @@ connectWords = (isRetry = false) ->
 
 main = ->
   acquireInstanceLock()
-  Agent.default.concurrency = 4 # let a barge-in turn start while a cancelled one drains
+  # Shared gate across every Agent.run() call, including nested ones: a turn
+  # that calls control_browser holds its own slot AND the sub-agent's for the
+  # whole delegated task, so 4 barely covers one turn + one barge-in. Bumped
+  # to 6 for headroom (see agl's Agent.default.concurrency / _acquireRunSlot).
+  Agent.default.concurrency = 6
 
   # fail fast if presence-voice isn't up (plan §9.3); systemd retries us.
   # Connect-only probe: the daemon closes wordlessly on bad requests, so
@@ -633,6 +654,9 @@ main = ->
     console.error "error: presence-voice daemon is not reachable (unix://#{CFG.presenceSock})"
     console.error '       start it: systemctl --user start voice'
     process.exit 1
+
+  # optional: the browser sub-agent, only if mcp-zen is running
+  await initBrowserAgent()
 
   startAvatarServer()
   connectWords()

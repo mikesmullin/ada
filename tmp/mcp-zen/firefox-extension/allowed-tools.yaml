@@ -1,0 +1,23 @@
+# Static allow-list of mcp-zen commands this extension will execute.
+# Edit this list and rebuild the extension (npm run build) to change what
+# an MCP client is permitted to do to this browser. There is no runtime
+# toggle UI by design -- this file is the single source of truth.
+enabled:
+  - list-tabs
+  - navigate
+  - new-tab
+  - close-tab
+  - activate-tab
+  - snapshot
+  - screenshot
+  - get-page-text
+  - get-form-fields
+  - click
+  - fill
+  - select-option
+  - check
+  - fill-form
+  - scroll
+  - press-key
+  - evaluate
+  - wait-for

@@ -6,6 +6,7 @@
   "dependencies": {
     "agl-ai": "file:../../agl",
     "bun-coffeescript": "^1.0.3",
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^4.1.0",
+    "@modelcontextprotocol/sdk": "^1.7.0"
   }
 }

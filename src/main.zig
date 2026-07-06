@@ -19,7 +19,7 @@ const HELP =
     \\  --solo                   no services: keyboard-driven states
     \\                           (1 idle, 2 listening, 3 active, 4 thinking,
     \\                            5 speaking, space pulse, q/esc quit)
-    \\  --style orb|hud          visual style (default orb):
+    \\  --style orb|hud          visual style (default hud):
     \\                             orb: glowing liquid orb
     \\                             hud: holographic reticle w/ radial spectrums
     \\  --size N                 window size in px (default 320)

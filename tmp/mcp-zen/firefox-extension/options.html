@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>mcp-zen Options</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 20px;
+      max-width: 640px;
+      margin: 0 auto;
+    }
+
+    .section {
+      margin-top: 20px;
+      background-color: #fff;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 15px;
+    }
+
+    h1 { margin-top: 0; }
+    h2 { margin-top: 0; font-size: 16px; }
+
+    .secret-value {
+      font-family: monospace;
+      word-break: break-all;
+      background-color: #f5f5f5;
+      padding: 10px;
+      border-radius: 4px;
+      border: 1px solid #e0e0e0;
+    }
+
+    button {
+      margin-top: 10px;
+      background-color: #4285f4;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    button:hover { background-color: #3367d6; }
+    button.granted { background-color: #34a853; cursor: default; }
+
+    .status { margin-top: 10px; color: #4caf50; font-size: 14px; min-height: 20px; }
+
+    input[type=text] {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-family: monospace;
+      margin-bottom: 10px;
+      box-sizing: border-box;
+    }
+
+    ul.tool-list { margin: 0; padding-left: 20px; font-family: monospace; font-size: 13px; }
+  </style>
+</head>
+
+<body>
+  <h1>mcp-zen Options</h1>
+  <p>Configuration for the mcp-zen browser extension.</p>
+
+  <div class="section">
+    <h2>Secret Key</h2>
+    <p>Generated on install. Configure the MCP server with the same value as <code>EXTENSION_SECRET</code>:</p>
+    <div class="secret-value" id="secret-display">Loading...</div>
+    <button id="copy-button">Copy to Clipboard</button>
+    <div class="status" id="secret-status"></div>
+  </div>
+
+  <div class="section">
+    <h2>WebSocket Ports</h2>
+    <p>Ports the extension listens on for the MCP server (comma-separated). Changing this reloads the extension.</p>
+    <input type="text" id="ports-input" placeholder="8765">
+    <button id="save-ports">Save Ports</button>
+    <div class="status" id="ports-status"></div>
+  </div>
+
+  <div class="section">
+    <h2>Browser Automation Permission</h2>
+    <p>Required for page interaction tools (click, fill, snapshot, evaluate, screenshot, etc.) to work on any
+      site. Grants the extension access to all URLs; revocable any time from <code>about:addons</code>.</p>
+    <button id="grant-permission">Enable browser automation</button>
+    <div class="status" id="permission-status"></div>
+  </div>
+
+  <div class="section">
+    <h2>Enabled Tools</h2>
+    <p>Static allow-list from <code>allowed-tools.yaml</code> (edit that file and rebuild to change):</p>
+    <ul class="tool-list" id="tool-list"></ul>
+  </div>
+
+  <script src="dist/options.js"></script>
+</body>
+
+</html>
