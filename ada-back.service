@@ -1,0 +1,40 @@
+# Ada back — persistent conversation loop (Bun CoffeeScript microagent).
+#
+# Installation:
+#   1. Install deps: cd back && bun install
+#   2. Edit WorkingDirectory below if your checkout isn't /workspace/ada
+#      (it must point at the repo's back/ dir — bunfig.toml is read from
+#      the working directory so Bun can run .coffee natively)
+#   3. Copy this file to ~/.config/systemd/user/ada-back.service
+#   4. systemctl --user daemon-reload
+#      systemctl --user enable --now ada-back
+#
+# View logs:
+#   journalctl --user -u ada-back -f
+#
+# Manual equivalent (identical behavior):
+#   cd /workspace/ada/back && bun ada-back.coffee
+#
+# Fail-fast by design (docs/PLAN.md §9.3): exits if perception-voice or
+# presence-voice are unreachable; Restart=on-failure brings it back once
+# they are. Wants= orders it after them when they're enabled.
+
+[Unit]
+Description=Ada Back - conversation loop
+Wants=perception-voice.service voice.service
+After=perception-voice.service voice.service
+
+[Service]
+Type=simple
+WorkingDirectory=/workspace/ada/back
+ExecStart=%h/.bun/bin/bun ada-back.coffee
+Restart=on-failure
+RestartSec=3
+Environment=PULSE_SERVER=unix:/run/user/%U/pulse/native
+# Tool commands live in ~/.local/bin (govee, laptop, ...) — the systemd
+# user manager's default PATH is just /usr/local/bin:/usr/bin, which makes
+# tools fail with command-not-found.
+Environment=PATH=%h/.local/bin:%h/.bun/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

@@ -46,7 +46,7 @@ an 8 s conversation window after each exchange for follow-ups.
 zig build -Doptimize=ReleaseSafe
 cp zig-out/bin/ada ~/.local/bin/
 (cd back && bun install)
-cp systemd/ada-back.service ~/.config/systemd/user/
+cp ada-back.service ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now ada-back
 ```
 
