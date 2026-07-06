@@ -78,8 +78,8 @@ const G = struct {
     var targets: Targets = .{};
     var smooth: Smooth = .{};
 
-    var brain_conn: ?std.Io.net.Stream = null;
-    var brain_mu: std.Io.Mutex = .init; // guards brain_conn writes/sends
+    var brain_fd: c_int = -1;
+    var brain_mu: std.Io.Mutex = .init; // guards brain_fd writes/sends
 
     var start_ts: std.Io.Clock.Timestamp = undefined;
     var last_time: f64 = 0;
@@ -158,9 +158,26 @@ fn setWmClass() void {
 // ---------------------------------------------------------------------------
 // Brain socket (JSON lines, bidirectional)
 
-fn connectBrain() !std.Io.net.Stream {
-    const addr = try std.Io.net.UnixAddress.init(G.opts.brain_sock);
-    return try addr.connect(G.io);
+// Deliberately raw POSIX (std.c), NOT std.Io: reading a mostly-idle stream
+// through the Threaded Io from a spawned thread degenerated into an
+// empty-line busy-spin (takeDelimiterExclusive returned "" at ~100k/s with
+// zero syscalls) that pinned a core and never delivered events. Plain
+// blocking read(2)/write(2) can't do that. The levels streams stay on
+// std.Io — they push continuously and block correctly.
+fn connectBrainFd() !c_int {
+    const fd = std.c.socket(std.c.AF.UNIX, std.c.SOCK.STREAM, 0);
+    if (fd < 0) return error.SocketFailed;
+    errdefer _ = std.c.close(fd);
+
+    var addr = std.mem.zeroes(std.c.sockaddr.un);
+    addr.family = std.c.AF.UNIX;
+    if (G.opts.brain_sock.len >= addr.path.len) return error.PathTooLong;
+    @memcpy(addr.path[0..G.opts.brain_sock.len], G.opts.brain_sock);
+
+    if (std.c.connect(fd, @ptrCast(&addr), @sizeOf(std.c.sockaddr.un)) != 0) {
+        return error.ConnectFailed;
+    }
+    return fd;
 }
 
 fn nowSeconds() f64 {
@@ -170,18 +187,19 @@ fn nowSeconds() f64 {
 }
 
 fn sleepSecond() void {
-    G.io.sleep(.{ .nanoseconds = 1_000_000_000 }, .awake) catch {};
+    // libc nanosleep, deliberately io-free: std.Io.sleep from a spawned
+    // (non-io-managed) thread can return immediately, which turned the
+    // brain reconnect loop into a 100%-CPU spin that never reconnected.
+    const ts = std.c.timespec{ .sec = 1, .nsec = 0 };
+    _ = std.c.nanosleep(&ts, null);
 }
 
 fn sendBrain(line: []const u8) void {
     G.brain_mu.lockUncancelable(G.io);
     defer G.brain_mu.unlock(G.io);
-    const conn = &(G.brain_conn orelse return);
-    var buf: [256]u8 = undefined;
-    var w = conn.writer(G.io, &buf);
-    w.interface.writeAll(line) catch return;
-    w.interface.writeAll("\n") catch return;
-    w.interface.flush() catch return;
+    if (G.brain_fd < 0) return;
+    _ = std.c.write(G.brain_fd, line.ptr, line.len);
+    _ = std.c.write(G.brain_fd, "\n", 1);
 }
 
 fn sendPtt(down: bool) void {
@@ -197,7 +215,9 @@ const StateMsg = struct {
 };
 
 fn handleBrainLine(line: []const u8) void {
-    const parsed = std.json.parseFromSlice(StateMsg, G.alloc, line, .{
+    // c_allocator: this runs on the brain socket thread, and G.alloc is
+    // main()'s arena (not thread-safe).
+    const parsed = std.json.parseFromSlice(StateMsg, std.heap.c_allocator, line, .{
         .ignore_unknown_fields = true,
     }) catch return;
     defer parsed.deinit();
@@ -213,30 +233,43 @@ fn handleBrainLine(line: []const u8) void {
 }
 
 fn brainThread() void {
+    var acc: [8192]u8 = undefined;
+    var acc_len: usize = 0;
     while (true) {
-        const conn = blk: {
+        const fd = blk: {
             G.brain_mu.lockUncancelable(G.io);
             defer G.brain_mu.unlock(G.io);
-            break :blk G.brain_conn;
+            break :blk G.brain_fd;
         };
-        if (conn) |c| {
-            var buf: [8192]u8 = undefined;
-            var reader = c.reader(G.io, &buf);
+        if (fd >= 0) {
+            var buf: [4096]u8 = undefined;
             while (true) {
-                const line = reader.interface.takeDelimiterExclusive('\n') catch break;
-                handleBrainLine(line);
+                const n = std.c.read(fd, &buf, buf.len);
+                if (n <= 0) break; // EOF or error: reconnect
+                for (buf[0..@intCast(n)]) |b| {
+                    if (b == '\n') {
+                        handleBrainLine(acc[0..acc_len]);
+                        acc_len = 0;
+                    } else if (acc_len < acc.len) {
+                        acc[acc_len] = b;
+                        acc_len += 1;
+                    }
+                }
             }
             // connection lost
+            std.debug.print("[avatar] brain connection lost, reconnecting…\n", .{});
+            acc_len = 0;
             G.brain_mu.lockUncancelable(G.io);
-            if (G.brain_conn) |*dead| dead.close(G.io);
-            G.brain_conn = null;
+            _ = std.c.close(G.brain_fd);
+            G.brain_fd = -1;
             G.brain_mu.unlock(G.io);
             setConnected(false);
         }
         sleepSecond();
-        if (connectBrain()) |fresh| {
+        if (connectBrainFd()) |fresh| {
+            std.debug.print("[avatar] brain reconnected\n", .{});
             G.brain_mu.lockUncancelable(G.io);
-            G.brain_conn = fresh;
+            G.brain_fd = fresh;
             G.brain_mu.unlock(G.io);
             setConnected(true);
         } else |_| {}
@@ -570,7 +603,7 @@ pub fn run(io: std.Io, alloc: std.mem.Allocator, opts: Options, log: *std.Io.Wri
 
     if (!opts.solo) {
         // fail fast, with an actionable message per missing service (§9.3)
-        G.brain_conn = connectBrain() catch {
+        G.brain_fd = connectBrainFd() catch {
             try log.print(
                 "error: ada brain is not reachable (unix://{s})\n" ++
                     "       start it: systemctl --user start ada-brain\n" ++
