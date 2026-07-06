@@ -5,3 +5,4 @@ node_modules/
 *.lock
 !brain/bun.lock
 src/shaders/*.glsl.zig
+zig-pkg/
