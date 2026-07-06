@@ -2,7 +2,7 @@
 //!
 //! Render thread: sokol_app + sokol_gfx drive a single fullscreen-quad
 //! shader; all animation state arrives as smoothed uniforms.
-//! Socket threads: brain (JSON lines, bidirectional), perception-voice
+//! Socket threads: back (JSON lines, bidirectional), perception-voice
 //! levels (binary FeatureFrames, mic), presence-voice levels (binary
 //! FeatureFrames, tts). Threads only write the `targets` struct; the
 //! render thread smooths toward it with attack/release envelopes.
@@ -28,7 +28,7 @@ pub const Style = enum { orb, hud };
 
 pub const Options = struct {
     solo: bool = false,
-    brain_sock: []const u8,
+    back_sock: []const u8,
     perception_sock: []const u8,
     presence_sock: []const u8,
     size: i32 = 320,
@@ -52,7 +52,7 @@ const Targets = struct {
     connected: f32 = 1,
     user: AudioFeat = .{},
     ada: AudioFeat = .{},
-    /// nowSeconds() of the last TTS frame with audible content. The brain's
+    /// nowSeconds() of the last TTS frame with audible content. The back's
     /// `speaking` state tracks request completion (OK = enqueued, playback
     /// is async), so it goes false while she is still audibly talking —
     /// the frames are the playback clock, and they open the speaking gate
@@ -84,8 +84,8 @@ const G = struct {
     var targets: Targets = .{};
     var smooth: Smooth = .{};
 
-    var brain_fd: c_int = -1;
-    var brain_mu: std.Io.Mutex = .init; // guards brain_fd writes/sends
+    var back_fd: c_int = -1;
+    var back_mu: std.Io.Mutex = .init; // guards back_fd writes/sends
 
     var start_ts: std.Io.Clock.Timestamp = undefined;
     var last_time: f64 = 0;
@@ -162,7 +162,7 @@ fn setWmClass() void {
 }
 
 // ---------------------------------------------------------------------------
-// Brain socket (JSON lines, bidirectional)
+// Back socket (JSON lines, bidirectional)
 
 // Deliberately raw POSIX (std.c), NOT std.Io: reading a mostly-idle stream
 // through the Threaded Io from a spawned thread degenerated into an
@@ -170,15 +170,15 @@ fn setWmClass() void {
 // zero syscalls) that pinned a core and never delivered events. Plain
 // blocking read(2)/write(2) can't do that. The levels streams stay on
 // std.Io — they push continuously and block correctly.
-fn connectBrainFd() !c_int {
+fn connectBackFd() !c_int {
     const fd = std.c.socket(std.c.AF.UNIX, std.c.SOCK.STREAM, 0);
     if (fd < 0) return error.SocketFailed;
     errdefer _ = std.c.close(fd);
 
     var addr = std.mem.zeroes(std.c.sockaddr.un);
     addr.family = std.c.AF.UNIX;
-    if (G.opts.brain_sock.len >= addr.path.len) return error.PathTooLong;
-    @memcpy(addr.path[0..G.opts.brain_sock.len], G.opts.brain_sock);
+    if (G.opts.back_sock.len >= addr.path.len) return error.PathTooLong;
+    @memcpy(addr.path[0..G.opts.back_sock.len], G.opts.back_sock);
 
     if (std.c.connect(fd, @ptrCast(&addr), @sizeOf(std.c.sockaddr.un)) != 0) {
         return error.ConnectFailed;
@@ -195,21 +195,21 @@ fn nowSeconds() f64 {
 fn sleepSecond() void {
     // libc nanosleep, deliberately io-free: std.Io.sleep from a spawned
     // (non-io-managed) thread can return immediately, which turned the
-    // brain reconnect loop into a 100%-CPU spin that never reconnected.
+    // back reconnect loop into a 100%-CPU spin that never reconnected.
     const ts = std.c.timespec{ .sec = 1, .nsec = 0 };
     _ = std.c.nanosleep(&ts, null);
 }
 
-fn sendBrain(line: []const u8) void {
-    G.brain_mu.lockUncancelable(G.io);
-    defer G.brain_mu.unlock(G.io);
-    if (G.brain_fd < 0) return;
-    _ = std.c.write(G.brain_fd, line.ptr, line.len);
-    _ = std.c.write(G.brain_fd, "\n", 1);
+fn sendBack(line: []const u8) void {
+    G.back_mu.lockUncancelable(G.io);
+    defer G.back_mu.unlock(G.io);
+    if (G.back_fd < 0) return;
+    _ = std.c.write(G.back_fd, line.ptr, line.len);
+    _ = std.c.write(G.back_fd, "\n", 1);
 }
 
 fn sendPtt(down: bool) void {
-    sendBrain(if (down) "{\"ev\":\"ptt\",\"down\":true}" else "{\"ev\":\"ptt\",\"down\":false}");
+    sendBack(if (down) "{\"ev\":\"ptt\",\"down\":true}" else "{\"ev\":\"ptt\",\"down\":false}");
 }
 
 const StateMsg = struct {
@@ -220,8 +220,8 @@ const StateMsg = struct {
     speaking: bool = false,
 };
 
-fn handleBrainLine(line: []const u8) void {
-    // c_allocator: this runs on the brain socket thread, and G.alloc is
+fn handleBackLine(line: []const u8) void {
+    // c_allocator: this runs on the back socket thread, and G.alloc is
     // main()'s arena (not thread-safe).
     const parsed = std.json.parseFromSlice(StateMsg, std.heap.c_allocator, line, .{
         .ignore_unknown_fields = true,
@@ -238,14 +238,14 @@ fn handleBrainLine(line: []const u8) void {
     G.targets.speaking = if (msg.speaking) 1 else 0;
 }
 
-fn brainThread() void {
+fn backThread() void {
     var acc: [8192]u8 = undefined;
     var acc_len: usize = 0;
     while (true) {
         const fd = blk: {
-            G.brain_mu.lockUncancelable(G.io);
-            defer G.brain_mu.unlock(G.io);
-            break :blk G.brain_fd;
+            G.back_mu.lockUncancelable(G.io);
+            defer G.back_mu.unlock(G.io);
+            break :blk G.back_fd;
         };
         if (fd >= 0) {
             var buf: [4096]u8 = undefined;
@@ -254,7 +254,7 @@ fn brainThread() void {
                 if (n <= 0) break; // EOF or error: reconnect
                 for (buf[0..@intCast(n)]) |b| {
                     if (b == '\n') {
-                        handleBrainLine(acc[0..acc_len]);
+                        handleBackLine(acc[0..acc_len]);
                         acc_len = 0;
                     } else if (acc_len < acc.len) {
                         acc[acc_len] = b;
@@ -263,20 +263,20 @@ fn brainThread() void {
                 }
             }
             // connection lost
-            std.debug.print("[avatar] brain connection lost, reconnecting…\n", .{});
+            std.debug.print("[avatar] back connection lost, reconnecting…\n", .{});
             acc_len = 0;
-            G.brain_mu.lockUncancelable(G.io);
-            _ = std.c.close(G.brain_fd);
-            G.brain_fd = -1;
-            G.brain_mu.unlock(G.io);
+            G.back_mu.lockUncancelable(G.io);
+            _ = std.c.close(G.back_fd);
+            G.back_fd = -1;
+            G.back_mu.unlock(G.io);
             setConnected(false);
         }
         sleepSecond();
-        if (connectBrainFd()) |fresh| {
-            std.debug.print("[avatar] brain reconnected\n", .{});
-            G.brain_mu.lockUncancelable(G.io);
-            G.brain_fd = fresh;
-            G.brain_mu.unlock(G.io);
+        if (connectBackFd()) |fresh| {
+            std.debug.print("[avatar] back reconnected\n", .{});
+            G.back_mu.lockUncancelable(G.io);
+            G.back_fd = fresh;
+            G.back_mu.unlock(G.io);
             setConnected(true);
         } else |_| {}
     }
@@ -459,14 +459,14 @@ export fn frame() void {
     }
 
     // Her actual audio opens the speaking gate (playback truth beats the
-    // brain's request-completion state — see Targets.ada_last_audible).
+    // back's request-completion state — see Targets.ada_last_audible).
     if (now - tgt.ada_last_audible < 0.3) tgt.speaking = 1;
 
     if (G.opts.solo) soloDrive(&tgt, now);
 
     // Until presence-voice grows its feature-frame stream (milestone 5, in
     // Bob's court — see docs/PLAN.md §5a), synthesize a speaking pulse from
-    // the brain's speaking state so the core still animates with her voice.
+    // the back's speaking state so the core still animates with her voice.
     if (!tgt.ada.live and tgt.speaking > 0.5) {
         const t: f32 = @floatCast(now);
         tgt.ada.rms = 0.35 + 0.3 * @sin(t * 3.1) + 0.15 * @sin(t * 9.7);
@@ -566,11 +566,11 @@ export fn event(ev: [*c]const sapp.Event) void {
             const held = G.last_time - G.press_started;
             G.press_started = -1;
             sendPtt(false);
-            if (held < 0.25) sendBrain("{\"ev\":\"click\"}"); // cancel/dismiss
+            if (held < 0.25) sendBack("{\"ev\":\"click\"}"); // cancel/dismiss
         },
         .KEY_DOWN => switch (e.key_code) {
             .ESCAPE, .Q => {
-                sendBrain("{\"ev\":\"quit\"}");
+                sendBack("{\"ev\":\"quit\"}");
                 sapp.requestQuit();
             },
             ._1 => if (G.opts.solo) {
@@ -615,12 +615,12 @@ pub fn run(io: std.Io, alloc: std.mem.Allocator, opts: Options, log: *std.Io.Wri
 
     if (!opts.solo) {
         // fail fast, with an actionable message per missing service (§9.3)
-        G.brain_fd = connectBrainFd() catch {
+        G.back_fd = connectBackFd() catch {
             try log.print(
-                "error: ada brain is not reachable (unix://{s})\n" ++
-                    "       start it: systemctl --user start ada-brain\n" ++
+                "error: ada back is not reachable (unix://{s})\n" ++
+                    "       start it: systemctl --user start ada-back\n" ++
                     "       (or run the orb alone: ada avatar --solo)\n",
-                .{opts.brain_sock},
+                .{opts.back_sock},
             );
             try log.flush();
             std.process.exit(1);
@@ -648,7 +648,7 @@ pub fn run(io: std.Io, alloc: std.mem.Allocator, opts: Options, log: *std.Io.Wri
             break :blk null;
         };
 
-        _ = try std.Thread.spawn(.{}, brainThread, .{});
+        _ = try std.Thread.spawn(.{}, backThread, .{});
         _ = try std.Thread.spawn(.{}, perceptionThread, .{@as(?std.Io.net.Stream, perc)});
         _ = try std.Thread.spawn(.{}, presenceThread, .{pres});
     }

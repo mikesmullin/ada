@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// ada-brain — the persistent conversation loop (docs/PLAN.md §6).
+// ada-back — the persistent conversation loop (docs/PLAN.md §6).
 //
 // Pipeline: perception-voice `subscribe words` (partials + utterances)
 //   → activation gate (PTT overlap / wake word / conversation window)
@@ -7,7 +7,7 @@
 //   → sentence splitter → presence-voice speak, sentence by sentence
 //   → state events to the avatar at every transition.
 //
-// The brain is the unix-socket *server* for the avatar (JSON lines,
+// The back is the unix-socket *server* for the avatar (JSON lines,
 // docs/PROTOCOL.md §4) and a *client* of both voice services.
 
 import Agent from 'agl-ai';
@@ -17,10 +17,10 @@ import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from
 import { spawn } from './lib/spawn.mjs';
 import { clamp, forceInt, forceRx } from './lib/validate.mjs';
 
-// Single-instance lock: a second brain would steal the avatar socket and
+// Single-instance lock: a second back would steal the avatar socket and
 // double-run every turn. Pidfile + liveness check (no flock in JS): a
 // stale file from a crash is detected via kill(pid, 0) and taken over.
-const LOCK_PATH = new URL('../.brain.lock', import.meta.url).pathname;
+const LOCK_PATH = new URL('../.back.lock', import.meta.url).pathname;
 
 function acquireInstanceLock() {
   try {
@@ -28,8 +28,8 @@ function acquireInstanceLock() {
     if (pid && pid !== process.pid) {
       try {
         process.kill(pid, 0); // throws if not running
-        console.error(`error: another ada-brain is already running (pid ${pid}, lock: ${LOCK_PATH})`);
-        console.error('       stop it first: systemctl --user stop ada-brain');
+        console.error(`error: another ada-back is already running (pid ${pid}, lock: ${LOCK_PATH})`);
+        console.error('       stop it first: systemctl --user stop ada-back');
         process.exit(1);
       } catch { /* stale lock from a dead process — take over */ }
     }
@@ -44,8 +44,8 @@ function releaseInstanceLock() {
 }
 
 const CFG = {
-  brainSock: process.env.ADA_BRAIN_SOCK
-    || `${process.env.XDG_RUNTIME_DIR || '/tmp'}/ada-brain.sock`,
+  backSock: process.env.ADA_BACK_SOCK
+    || `${process.env.XDG_RUNTIME_DIR || '/tmp'}/ada-back.sock`,
   perceptionSock: process.env.ADA_PERCEPTION_SOCK
     || '/workspace/perception-voice/perception.sock',
   presenceSock: process.env.ADA_PRESENCE_SOCK || '/tmp/presence-voice.sock',
@@ -82,7 +82,7 @@ function setState(patch) {
 }
 
 function startAvatarServer() {
-  if (existsSync(CFG.brainSock)) unlinkSync(CFG.brainSock);
+  if (existsSync(CFG.backSock)) unlinkSync(CFG.backSock);
   const server = net.createServer((sock) => {
     avatars.add(sock);
     sock.write(JSON.stringify({ ev: 'state', ...state }) + '\n');
@@ -101,8 +101,8 @@ function startAvatarServer() {
     sock.on('close', () => { avatars.delete(sock); log('avatar disconnected'); });
     sock.on('error', () => avatars.delete(sock));
   });
-  server.listen(CFG.brainSock);
-  log(`avatar server listening on unix://${CFG.brainSock}`);
+  server.listen(CFG.backSock);
+  log(`avatar server listening on unix://${CFG.backSock}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -423,7 +423,7 @@ function registerTools(agent) {
 // Turn engine
 
 // SOUL.md: standing knowledge (who Mike is, preferences, facts) appended
-// to the system prompt at startup — edit the file, restart the brain.
+// to the system prompt at startup — edit the file, restart the back.
 const SOUL_PATH = process.env.ADA_SOUL || new URL('../SOUL.md', import.meta.url).pathname;
 
 function loadSoul() {
@@ -657,7 +657,7 @@ async function main() {
 
   startAvatarServer();
   connectWords();
-  log(`ada-brain ready (voice=${CFG.voice} model=${CFG.model} wake=${CFG.wake})`);
+  log(`ada-back ready (voice=${CFG.voice} model=${CFG.model} wake=${CFG.wake})`);
 
   // ADA_SELFTEST="<text>": run one synthetic utterance through the full
   // turn pipeline (gate → agent → splitter → speaker → latency report)
@@ -676,7 +676,7 @@ async function main() {
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
-    try { if (existsSync(CFG.brainSock)) unlinkSync(CFG.brainSock); } catch {}
+    try { if (existsSync(CFG.backSock)) unlinkSync(CFG.backSock); } catch {}
     releaseInstanceLock();
     process.exit(0);
   });

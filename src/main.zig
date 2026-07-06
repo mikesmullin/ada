@@ -1,6 +1,6 @@
 //! ada — always-on desktop assistant. Subcommand-style CLI (like `voice`):
-//! `ada avatar` opens the orb overlay; the brain runs separately as a Bun
-//! systemd --user unit (brain/ada-brain.mjs). See docs/PLAN.md.
+//! `ada avatar` opens the orb overlay; the back runs separately as a Bun
+//! systemd --user unit (back/ada-back.mjs). See docs/PLAN.md.
 
 const std = @import("std");
 const avatar = @import("avatar.zig");
@@ -23,7 +23,7 @@ const HELP =
     \\                             orb: glowing liquid orb
     \\                             hud: holographic reticle w/ radial spectrums
     \\  --size N                 window size in px (default 320)
-    \\  --brain-sock PATH        default $XDG_RUNTIME_DIR/ada-brain.sock
+    \\  --back-sock PATH        default $XDG_RUNTIME_DIR/ada-back.sock
     \\  --perception-sock PATH   default /workspace/perception-voice/perception.sock
     \\  --presence-sock PATH     default /tmp/presence-voice.sock
     \\
@@ -31,11 +31,11 @@ const HELP =
     \\
 ;
 
-fn defaultBrainSock(alloc: std.mem.Allocator) []const u8 {
+fn defaultBackSock(alloc: std.mem.Allocator) []const u8 {
     if (std.c.getenv("XDG_RUNTIME_DIR")) |dir| {
-        return std.fmt.allocPrint(alloc, "{s}/ada-brain.sock", .{std.mem.span(dir)}) catch "/tmp/ada-brain.sock";
+        return std.fmt.allocPrint(alloc, "{s}/ada-back.sock", .{std.mem.span(dir)}) catch "/tmp/ada-back.sock";
     }
-    return "/tmp/ada-brain.sock";
+    return "/tmp/ada-back.sock";
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -50,7 +50,7 @@ pub fn main(init: std.process.Init) !void {
 
     if (std.mem.eql(u8, cmd, "avatar")) {
         var opts = avatar.Options{
-            .brain_sock = defaultBrainSock(arena),
+            .back_sock = defaultBackSock(arena),
             .perception_sock = "/workspace/perception-voice/perception.sock",
             .presence_sock = "/tmp/presence-voice.sock",
         };
@@ -69,9 +69,9 @@ pub fn main(init: std.process.Init) !void {
             } else if (std.mem.eql(u8, a, "--size") and i + 1 < args.len) {
                 i += 1;
                 opts.size = try std.fmt.parseInt(i32, args[i], 10);
-            } else if (std.mem.eql(u8, a, "--brain-sock") and i + 1 < args.len) {
+            } else if (std.mem.eql(u8, a, "--back-sock") and i + 1 < args.len) {
                 i += 1;
-                opts.brain_sock = args[i];
+                opts.back_sock = args[i];
             } else if (std.mem.eql(u8, a, "--perception-sock") and i + 1 < args.len) {
                 i += 1;
                 opts.perception_sock = args[i];

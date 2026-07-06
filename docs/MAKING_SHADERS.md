@@ -24,7 +24,7 @@ GL/GLES/Metal/HLSL/WGSL so don't use GL-only tricks.
 layout(binding=0) uniform fs_params {
     vec4 res_time;  // x: width px, y: height px, z: time s, w: press 0..1
     vec4 states_a;  // x: idle, y: listening, z: active, w: thinking
-    vec4 states_b;  // x: speaking, y: brain-connected, z,w: unused
+    vec4 states_b;  // x: speaking, y: back-connected, z,w: unused
     vec4 user_a;    // x: rms, yzw: band 0..2      (mic / the user)
     vec4 user_b;    // x: band 3, y: attack env, z: vad, w: unused
     vec4 ada_a;     // x: rms, yzw: band 0..2      (tts / ada)
@@ -42,7 +42,7 @@ Semantics you can rely on:
   ~1 in practice, so "listening" visuals must be *subtle* — idle is the
   resting look, listening only adds a whisper of reactivity.
 - `press` is PTT feedback (left button held on the window).
-- `connected` < 1 means the brain is unreachable: the style must have a
+- `connected` < 1 means the back is unreachable: the style must have a
   clearly "wounded" look (both existing styles desaturate toward dim red
   and slow/stall their motion).
 - Audio: `rms` and 4 spectral bands per stream, 0..1, ~60 Hz from the
@@ -50,7 +50,7 @@ Semantics you can rely on:
   .y, treble in `*_b.x`). `env` spikes on attacks/plosives — great for
   flashes and ripples. `vad` is mic voice-activity (user stream only).
 - The host force-opens `speaking` whenever ada frames carry audible rms
-  (playback truth beats brain state timing) — so gating her visuals on
+  (playback truth beats back state timing) — so gating her visuals on
   `w_speak * a_rms` is correct and will animate in sync with her actual
   voice.
 
@@ -66,7 +66,7 @@ should keep the hue semantics unless he asks otherwise:
 | active / engaged attention | **amber** |
 | thinking | **violet** |
 | Ada's voice / core | **warm bright cyan-white** |
-| brain lost | dim **red**, motion stalled |
+| back lost | dim **red**, motion stalled |
 
 ## Techniques that work (learned the hard way)
 

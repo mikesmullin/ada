@@ -1,3 +1,6 @@
+> Historical note: the component this draft calls the "brain" was renamed
+> to **"back"** (2026-07-05) to avoid confusion with github.com/mikesmullin/brain.
+
 # Ada — plan (DRAFT, for iteration)
 
 Status: **draft for discussion — nothing approved for implementation.**

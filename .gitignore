@@ -3,6 +3,6 @@ zig-out/
 node_modules/
 *.log
 *.lock
-!brain/bun.lock
+!back/bun.lock
 src/shaders/*.glsl.zig
 zig-pkg/

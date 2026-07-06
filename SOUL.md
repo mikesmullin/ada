@@ -1,9 +1,9 @@
 # Ada's soul
 
 Standing knowledge Ada carries into every conversation. This whole file is
-loaded into her system prompt when the brain starts — add facts,
+loaded into her system prompt when the back starts — add facts,
 preferences, and standing instructions over time, then
-`systemctl --user restart ada-brain` to apply.
+`systemctl --user restart ada-back` to apply.
 
 ## Who you're talking to
 

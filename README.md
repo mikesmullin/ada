@@ -20,7 +20,7 @@ Design doc: [docs/PLAN.md](docs/PLAN.md) · wire spec: [docs/PROTOCOL.md](docs/P
   (idle/listening/active/thinking/speaking), your voice's spectral bands on
   the halo, her voice on the core. `WM_CLASS = "ada"` so awesome-WM rules
   own placement ([docs/rc.lua.example](docs/rc.lua.example)).
-- **`brain/ada-brain.mjs`** (Bun + agl-ai) — the conversation loop:
+- **`back/ada-back.mjs`** (Bun + agl-ai) — the conversation loop:
   perception-voice `subscribe words` push stream (partials + finals) →
   activation gate → streamed LLM turn → per-sentence TTS. Tools:
   conversation, home lights (govee/openrgb), mari activities (apps +
@@ -30,7 +30,7 @@ Design doc: [docs/PLAN.md](docs/PLAN.md) · wire spec: [docs/PROTOCOL.md](docs/P
 
 ```
 zig build                        # → zig-out/bin/ada
-systemctl --user start ada-brain # or: cd brain && bun ada-brain.mjs
+systemctl --user start ada-back # or: cd back && bun ada-back.mjs
 ada avatar                       # the orb (fails fast if services are down)
 ada avatar --style hud           # alt style: holographic reticle + radial spectrums
 ada avatar --solo                # no services: 1-5 toggle states, space pulse
@@ -45,16 +45,16 @@ an 8 s conversation window after each exchange for follow-ups.
 ```
 zig build -Doptimize=ReleaseSafe
 cp zig-out/bin/ada ~/.local/bin/
-(cd brain && bun install)
-cp systemd/ada-brain.service ~/.config/systemd/user/
-systemctl --user daemon-reload && systemctl --user enable --now ada-brain
+(cd back && bun install)
+cp systemd/ada-back.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now ada-back
 ```
 
 Requires running: `perception-voice` (with the `subscribe` streaming
 interface, deployed), `voice serve` (presence-voice v2), lm-studio on
 :1234 with `google/gemma-4-e4b` loaded.
 
-## Brain env knobs
+## Back env knobs
 
 | var | default |
 |---|---|
@@ -62,7 +62,7 @@ interface, deployed), `voice serve` (presence-voice v2), lm-studio on
 | `ADA_MODEL` | `lm-studio:google/gemma-4-e4b` |
 | `ADA_WAKE` | `\bada\b` |
 | `ADA_CONV_WINDOW_MS` | `8000` |
-| `ADA_BRAIN_SOCK` | `$XDG_RUNTIME_DIR/ada-brain.sock` |
+| `ADA_BACK_SOCK` | `$XDG_RUNTIME_DIR/ada-back.sock` |
 | `ADA_SOUL` | `SOUL.md` (repo root) — standing knowledge loaded into her system prompt at startup |
 | `ADA_SELFTEST` | unset — set to a phrase to run one synthetic turn (no mic) |
 

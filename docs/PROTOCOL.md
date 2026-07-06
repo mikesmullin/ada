@@ -45,7 +45,7 @@ the connection becomes a **push stream** (never closed by the server):
   (two half-overlapping windows per 512-sample mic chunk @16 kHz = 62.5 Hz).
   Consumed by the avatar.
 - `channel=words` → framed JSON messages (same 4-byte-BE framing), pushed
-  the moment they exist. Consumed by the brain:
+  the moment they exist. Consumed by the back:
 
 ```json
 {"ev":"partial",   "ts":1234567890.123, "text":"turn on the des"}
@@ -73,12 +73,12 @@ caller must say which semantics it wants:
 
 - `enqueue` — queue behind whatever speech is already playing. The
   daemon's speech channel is a strict FIFO, so consecutive enqueues play
-  gapless in order (the brain's per-sentence streaming path).
+  gapless in order (the back's per-sentence streaming path).
 - `interrupt` — immediately silence any playing/queued speech, then speak.
   With **empty text** this is the stop primitive: silence, `OK`, nothing
-  spoken (the brain's click-cancel and barge-in path).
+  spoken (the back's click-cancel and barge-in path).
 
-The brain schedules a reply's opening sentence as `interrupt` and the
+The back schedules a reply's opening sentence as `interrupt` and the
 rest as `enqueue`. HTTP `POST /speak` mirrors this with a required
 `"schedule"` JSON field for `mode=play`.
 
@@ -105,25 +105,25 @@ to a synthesized speaking pulse if the daemon is old or unreachable.
 {"ev":"speak-end"}
 ```
 
-## 4. avatar ⇄ brain (JSON lines)
+## 4. avatar ⇄ back (JSON lines)
 
-Socket: `$XDG_RUNTIME_DIR/ada-brain.sock` (fallback `/tmp/ada-brain.sock`).
-The brain is the server (long-lived systemd unit); the avatar connects and
+Socket: `$XDG_RUNTIME_DIR/ada-back.sock` (fallback `/tmp/ada-back.sock`).
+The back is the server (long-lived systemd unit); the avatar connects and
 **fails fast** with a clear error if it can't (plan §9.3).
 
 Line-delimited JSON, one object per line:
 
 ```
-brain → avatar:  {"ev":"state", "listening":true, "active":false,
+back → avatar:  {"ev":"state", "listening":true, "active":false,
                   "thinking":false, "speaking":false}
                  {"ev":"caption", "who":"ada"|"user", "text":"..."}   // future
-avatar → brain:  {"ev":"ptt", "down":true|false}
+avatar → back:  {"ev":"ptt", "down":true|false}
                  {"ev":"click"}     // short press: cancel / dismiss
                  {"ev":"quit"}
 ```
 
 Press-and-hold semantics: the avatar sends `ptt down:true` on left-button
 press immediately (latency), `down:false` on release; if the hold was
-shorter than 250 ms it also sends `click` — the brain treats a sub-250 ms
+shorter than 250 ms it also sends `click` — the back treats a sub-250 ms
 PTT window with no speech as a no-op, and `click` cancels any pending or
 speaking turn (whisper-style cancel-before-commit).
