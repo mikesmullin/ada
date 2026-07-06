@@ -19,6 +19,9 @@ const HELP =
     \\  --solo                   no services: keyboard-driven states
     \\                           (1 idle, 2 listening, 3 active, 4 thinking,
     \\                            5 speaking, space pulse, q/esc quit)
+    \\  --style orb|hud          visual style (default orb):
+    \\                             orb: glowing liquid orb
+    \\                             hud: holographic reticle w/ radial spectrums
     \\  --size N                 window size in px (default 320)
     \\  --brain-sock PATH        default $XDG_RUNTIME_DIR/ada-brain.sock
     \\  --perception-sock PATH   default /workspace/perception-voice/perception.sock
@@ -56,6 +59,13 @@ pub fn main(init: std.process.Init) !void {
             const a = args[i];
             if (std.mem.eql(u8, a, "--solo")) {
                 opts.solo = true;
+            } else if (std.mem.eql(u8, a, "--style") and i + 1 < args.len) {
+                i += 1;
+                opts.style = std.meta.stringToEnum(avatar.Style, args[i]) orelse {
+                    try stdout.print("error: unknown style '{s}' (orb|hud)\n", .{args[i]});
+                    try stdout.flush();
+                    std.process.exit(1);
+                };
             } else if (std.mem.eql(u8, a, "--size") and i + 1 < args.len) {
                 i += 1;
                 opts.size = try std.fmt.parseInt(i32, args[i], 10);

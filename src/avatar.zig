@@ -19,7 +19,12 @@ const sg = sokol.gfx;
 const sapp = sokol.app;
 const sglue = sokol.glue;
 const shd = @import("shaders/orb.glsl.zig");
+const shd_hud = @import("shaders/hud.glsl.zig");
 const ipc = @import("ipc.zig");
+
+/// Visual styles. Same uniform block in every shader, so all state/audio
+/// signals drive each style identically — only the artwork differs.
+pub const Style = enum { orb, hud };
 
 pub const Options = struct {
     solo: bool = false,
@@ -27,6 +32,7 @@ pub const Options = struct {
     perception_sock: []const u8,
     presence_sock: []const u8,
     size: i32 = 320,
+    style: Style = .orb,
 };
 
 const AudioFeat = struct {
@@ -402,8 +408,14 @@ export fn init() void {
         }),
     });
 
+    // both programs share the vertex layout (one vec2 position at slot 0)
+    // and the fs_params uniform block, so only the shader desc differs
+    const shader_desc = switch (G.opts.style) {
+        .orb => shd.orbShaderDesc(sg.queryBackend()),
+        .hud => shd_hud.hudShaderDesc(sg.queryBackend()),
+    };
     G.pip = sg.makePipeline(.{
-        .shader = sg.makeShader(shd.orbShaderDesc(sg.queryBackend())),
+        .shader = sg.makeShader(shader_desc),
         .layout = init: {
             var l = sg.VertexLayoutState{};
             l.attrs[shd.ATTR_orb_position].format = .FLOAT2;

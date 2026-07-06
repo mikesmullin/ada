@@ -7,22 +7,26 @@ pub fn build(b: *std.Build) !void {
 
     const sokol_dep = b.dependency("sokol", .{ .target = target, .optimize = optimize });
 
-    // Compile the orb GLSL into a Zig source file via sokol-shdc (prebuilt
-    // binary, build-time only). Cross-compiles the shader for every backend
-    // so the avatar stays Windows/macOS-portable later.
-    const shd_step = try sokolbuild.shdc.createSourceFile(b, .{
-        .shdc_dep = b.dependency("shdc", .{}),
-        .input = "src/shaders/orb.glsl",
-        .output = "src/shaders/orb.glsl.zig",
-        .slang = .{
-            .glsl410 = true,
-            .glsl300es = true,
-            .metal_macos = true,
-            .hlsl5 = true,
-            .wgsl = true,
-        },
-        .reflection = true,
-    });
+    // Compile each avatar style's GLSL into a Zig source file via sokol-shdc
+    // (prebuilt binary, build-time only). Cross-compiles the shaders for
+    // every backend so the avatar stays Windows/macOS-portable later.
+    const shader_names = [_][]const u8{ "orb", "hud" };
+    var shd_steps: [shader_names.len]*std.Build.Step = undefined;
+    inline for (shader_names, 0..) |name, i| {
+        shd_steps[i] = try sokolbuild.shdc.createSourceFile(b, .{
+            .shdc_dep = b.dependency("shdc", .{}),
+            .input = "src/shaders/" ++ name ++ ".glsl",
+            .output = "src/shaders/" ++ name ++ ".glsl.zig",
+            .slang = .{
+                .glsl410 = true,
+                .glsl300es = true,
+                .metal_macos = true,
+                .hlsl5 = true,
+                .wgsl = true,
+            },
+            .reflection = true,
+        });
+    }
 
     const exe = b.addExecutable(.{
         .name = "ada",
@@ -38,7 +42,7 @@ pub fn build(b: *std.Build) !void {
     // XSetClassHint for WM_CLASS = "ada" (awesome-WM client rules key on it).
     // Linux/X11 only; guarded by builtin.os.tag in avatar.zig.
     if (target.result.os.tag == .linux) exe.root_module.linkSystemLibrary("X11", .{});
-    exe.step.dependOn(shd_step);
+    for (shd_steps) |s| exe.step.dependOn(s);
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
