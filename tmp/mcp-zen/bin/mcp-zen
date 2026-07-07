@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-# Thin wrapper so `mcp-zen` can be installed on $PATH (e.g. symlinked into
-# ~/.local/bin) while the actual project stays put wherever it's checked out.
-set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-exec node "$SCRIPT_DIR/../mcp-server/dist/server.js" "$@"
