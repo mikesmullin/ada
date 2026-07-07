@@ -18,6 +18,13 @@ BROWSER_SYSTEM_PROMPT = '''
   Use whatever tools and steps are needed to complete it, then reply with
   a short, plain-text summary of what you found or did -- no markdown, no
   further tool calls once you have your answer.
+  To click something, prefer zen_click_text with the visible text you want
+  (e.g. "click the Bitcoin video", "click Orders") over zen_click. If you do
+  use zen_click, its selector must be real CSS that document.querySelector
+  accepts -- copy the exact `selector` zen_snapshot gave that element. There
+  is no jQuery/Playwright/BeautifulSoup selector engine here, so things like
+  :contains(), :has-text(), or :-soup-contains() do not exist and will
+  always fail; never invent selector syntax like that.
   '''
 
 # Best-effort warmup at ada-back startup so the first real request doesn't
