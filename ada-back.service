@@ -35,6 +35,10 @@ Environment=PULSE_SERVER=unix:/run/user/%U/pulse/native
 # user manager's default PATH is just /usr/local/bin:/usr/bin, which makes
 # tools fail with command-not-found.
 Environment=PATH=%h/.local/bin:%h/.bun/bin:/usr/local/bin:/usr/bin:/bin
+# systemd --user units don't source ~/.bashrc, so FAV_LOCAL_LLM (the
+# default model, set in ~/.bashrc for interactive/manual runs) has to be
+# mirrored here too. Keep this in sync with ~/.bashrc's export.
+Environment=FAV_LOCAL_LLM=lm-studio:google/gemma-4-12b-qat
 
 [Install]
 WantedBy=default.target

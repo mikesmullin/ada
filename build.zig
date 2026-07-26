@@ -28,6 +28,33 @@ pub fn build(b: *std.Build) !void {
         });
     }
 
+    // MSDF caption shader — module import (same pattern as gl1).
+    const dep_shdc = b.dependency("shdc", .{});
+    const sdf_text_shader = try sokolbuild.shdc.createModule(b, "sdf_text_shader", sokol_dep.module("sokol"), .{
+        .shdc_dep = dep_shdc,
+        .input = "src/shaders/sdf_text.glsl",
+        .output = "sdf_text.glsl.zig",
+        .slang = .{
+            .glsl410 = true,
+            .glsl300es = true,
+            .metal_macos = true,
+            .hlsl5 = true,
+            .wgsl = true,
+        },
+        .reflection = true,
+    });
+
+    const sdf_metrics = b.createModule(.{
+        .root_source_file = b.path("assets/fonts/jetbrains_mono_msdf.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const font_assets = b.createModule(.{
+        .root_source_file = b.path("assets/fonts/embed.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe = b.addExecutable(.{
         .name = "ada",
         .root_module = b.createModule(.{
@@ -36,6 +63,9 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "sokol", .module = sokol_dep.module("sokol") },
+                .{ .name = "sdf_text_shader", .module = sdf_text_shader },
+                .{ .name = "sdf_metrics", .module = sdf_metrics },
+                .{ .name = "font_assets", .module = font_assets },
             },
         }),
     });

@@ -116,7 +116,10 @@ Line-delimited JSON, one object per line:
 ```
 back → avatar:  {"ev":"state", "listening":true, "active":false,
                   "thinking":false, "speaking":false}
-                 {"ev":"caption", "who":"ada"|"user", "text":"..."}   // future
+                 {"ev":"caption", "who":"ada"|"user", "text":"..."}
+                 // each non-empty text spawns a caption particle (stack from
+                 // bottom, newest lowest). 1s solid then fade out by 5s.
+                 // empty text is a no-op; particles self-expire.
 avatar → back:  {"ev":"ptt", "down":true|false}
                  {"ev":"click"}     // short press: cancel / dismiss
                  {"ev":"quit"}

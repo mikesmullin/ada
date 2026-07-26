@@ -21,6 +21,9 @@ const sglue = sokol.glue;
 const shd = @import("shaders/orb.glsl.zig");
 const shd_hud = @import("shaders/hud.glsl.zig");
 const ipc = @import("ipc.zig");
+const sdf_font_mod = @import("sdf_font.zig");
+const font_assets = @import("font_assets");
+const caption_mod = @import("caption.zig");
 
 /// Visual styles. Same uniform block in every shader, so all state/audio
 /// signals drive each style identically — only the artwork differs.
@@ -93,6 +96,9 @@ const G = struct {
 
     var bind: sg.Bindings = .{};
     var pip: sg.Pipeline = .{};
+    var font: sdf_font_mod.SdfFont = .{};
+    /// Closed captions as Game9-style particles (spawn / age / fade / GC).
+    var captions: caption_mod.System = .{};
 
     // --solo keyboard toggles
     var solo_listen: bool = true;
@@ -100,6 +106,7 @@ const G = struct {
     var solo_think: bool = false;
     var solo_speak: bool = false;
     var solo_pulse: f64 = -10;
+    var solo_caption_i: u32 = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -218,7 +225,14 @@ const StateMsg = struct {
     active: bool = false,
     thinking: bool = false,
     speaking: bool = false,
+    who: []const u8 = "",
+    text: []const u8 = "",
 };
+
+fn spawnCaption(text: []const u8) void {
+    // Empty = no-op: particles self-expire (Game9 lifetime), no hard clear.
+    G.captions.spawn(G.io, nowSeconds(), text);
+}
 
 fn handleBackLine(line: []const u8) void {
     // c_allocator: this runs on the back socket thread, and G.alloc is
@@ -228,7 +242,15 @@ fn handleBackLine(line: []const u8) void {
     }) catch return;
     defer parsed.deinit();
     const msg = parsed.value;
-    if (!std.mem.eql(u8, msg.ev, "state")) return; // captions are future work
+
+    if (std.mem.eql(u8, msg.ev, "caption")) {
+        // who:"ada" (or omitted) → spawn a caption particle.
+        if (msg.who.len == 0 or std.mem.eql(u8, msg.who, "ada")) {
+            spawnCaption(msg.text);
+        }
+        return;
+    }
+    if (!std.mem.eql(u8, msg.ev, "state")) return;
 
     G.targets.mu.lockUncancelable(G.io);
     defer G.targets.mu.unlock(G.io);
@@ -290,6 +312,7 @@ fn setConnected(ok: bool) void {
         G.targets.active = 0;
         G.targets.thinking = 0;
         G.targets.speaking = 0;
+        // leave caption particles to age out on their own
     }
 }
 
@@ -422,6 +445,11 @@ export fn init() void {
             break :init l;
         },
     });
+
+    // MSDF caption font (JetBrains Mono atlas, same as gl1).
+    G.font.init(G.alloc, font_assets.jetbrains_mono_msdf_png) catch |err| {
+        std.debug.print("[avatar] sdf font init failed: {t}\n", .{err});
+    };
 }
 
 /// Exponential approach: fast attack, slower release (plan §4 — "all
@@ -442,6 +470,9 @@ export fn frame() void {
     const now: f64 = nowSeconds();
     const dt: f32 = @floatCast(@max(now - G.last_time, 0.0001));
     G.last_time = now;
+
+    // caption particles: expire finished ones (Game9 Particle__updateSystem)
+    G.captions.update(G.io, now);
 
     // copy targets (tiny critical section)
     var tgt: Targets = undefined;
@@ -512,11 +543,29 @@ export fn frame() void {
         .ada_b = .{ s.ada.band[3], s.ada_env, 0, 0 },
     };
 
+    const sw = sapp.widthf();
+    const sh = sapp.heightf();
+
     sg.beginPass(.{ .swapchain = sglue.swapchain() });
     sg.applyPipeline(G.pip);
     sg.applyBindings(G.bind);
     sg.applyUniforms(shd.UB_fs_params, sg.asRange(&params));
     sg.draw(0, 3, 1);
+
+    // Closed captions: particle stack (newest at bottom, fade after solid hold).
+    if (G.font.ok) {
+        var cap_text: [caption_mod.MAX][caption_mod.TEXT_CAP]u8 = undefined;
+        var cap_len: [caption_mod.MAX]usize = @splat(0);
+        var cap_born: [caption_mod.MAX]f64 = @splat(0);
+        const cap_n = G.captions.snapshot(G.io, &cap_text, &cap_len, &cap_born);
+        if (cap_n > 0) {
+            const font_size = @max(12.0, @min(18.0, sw * 0.045));
+            G.font.beginFrame();
+            caption_mod.drawStack(&G.font, sw, sh, font_size, now, &cap_text, &cap_len, &cap_born, cap_n);
+            G.font.flush(sw, sh);
+        }
+    }
+
     sg.endPass();
     sg.commit();
 }
@@ -589,9 +638,17 @@ export fn event(ev: [*c]const sapp.Event) void {
             },
             ._5 => if (G.opts.solo) {
                 G.solo_speak = !G.solo_speak;
+                if (G.solo_speak) {
+                    spawnCaption("Hello — this is a sample caption.");
+                }
             },
             .SPACE => if (G.opts.solo) {
                 G.solo_pulse = G.last_time;
+                // Spawn another caption to demo stacking / fade.
+                G.solo_caption_i +%= 1;
+                var buf: [64]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "Caption particle #{d}", .{G.solo_caption_i}) catch "Caption particle";
+                spawnCaption(msg);
             },
             else => {},
         },
@@ -600,6 +657,7 @@ export fn event(ev: [*c]const sapp.Event) void {
 }
 
 export fn cleanup() void {
+    if (G.font.ok) G.font.deinit();
     sg.shutdown();
 }
 

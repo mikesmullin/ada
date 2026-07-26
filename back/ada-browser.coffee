@@ -8,7 +8,7 @@
 import Agent from 'agl-ai'
 import { ensureMcpZen, registerMcpZenTools } from './lib/mcp-zen.coffee'
 
-MODEL = process.env.ADA_MODEL or 'lm-studio:google/gemma-4-e4b'
+MODEL = process.env.ADA_MODEL or process.env.FAV_LOCAL_LLM
 
 BROWSER_SYSTEM_PROMPT = '''
   You control a real, already-open web browser through tools: list/open/

@@ -4,7 +4,7 @@ Always-on agentic desktop assistant with a visible presence: a procedural
 avatar (Zig + sokol) that reacts to what she hears (your voice) and what
 she says (hers). Inspired by Siri; built on the local stack:
 perception-voice (Whisper STT), presence-voice (Piper/Kokoro TTS),
-lm-studio (`google/gemma-4-e4b`), and agl-ai.
+lm-studio (`google/gemma-4-12b-qat`), and agl-ai.
 
 <p align="center">
   <img src="docs/screenshot-hud.png" alt="ada avatar --style hud, listening and speaking at once">
@@ -52,18 +52,28 @@ systemctl --user daemon-reload && systemctl --user enable --now ada-back
 
 Requires running: `perception-voice` (with the `subscribe` streaming
 interface, deployed), `voice serve` (presence-voice v2), lm-studio on
-:1234 with `google/gemma-4-e4b` loaded.
+:1234 with `google/gemma-4-12b-qat` loaded.
+
+## config.yaml
+
+User-tunable settings that are nicer to hand-edit than an env var live in
+[config.yaml](config.yaml) (repo root) — currently just `voice`, the
+presence-voice preset name (see `voices:` in `/workspace/voice/config.yaml`
+for the full list). Edit it and `systemctl --user restart ada-back` to
+apply. Every key doubles as an env var (below) for one-off overrides
+without touching the file — the env var always wins when set.
 
 ## Back env knobs
 
 | var | default |
 |---|---|
-| `ADA_VOICE` | `ada` (presence-voice preset) |
-| `ADA_MODEL` | `lm-studio:google/gemma-4-e4b` |
+| `ADA_VOICE` | `config.yaml`'s `voice`, else `ada` (presence-voice preset) |
+| `ADA_MODEL` | `$FAV_LOCAL_LLM` |
 | `ADA_WAKE` | `\bada\b` |
 | `ADA_CONV_WINDOW_MS` | `8000` |
 | `ADA_BACK_SOCK` | `$XDG_RUNTIME_DIR/ada-back.sock` |
 | `ADA_SOUL` | `SOUL.md` (repo root) — standing knowledge loaded into her system prompt at startup |
+| `ADA_CONFIG` | `config.yaml` (repo root) |
 | `ADA_SELFTEST` | unset — set to a phrase to run one synthetic turn (no mic) |
 
 ## Status / deferred

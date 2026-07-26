@@ -46,14 +46,29 @@ releaseInstanceLock = ->
     unlinkSync LOCK_PATH if Number(readFileSync(LOCK_PATH, 'utf8').trim()) is process.pid
   catch e then null # already gone
 
+# ---------------------------------------------------------------------------
+# config.yaml: user-tunable settings (voice preset, ...) that are nicer to
+# hand-edit than an env var. Env vars still win when set, for quick one-off
+# overrides without touching the file.
+CONFIG_PATH = process.env.ADA_CONFIG or new URL('../config.yaml', import.meta.url).pathname
+
+loadConfig = ->
+  try
+    yaml.load readFileSync(CONFIG_PATH, 'utf8')
+  catch e
+    console.log "no config.yaml at #{CONFIG_PATH} (#{e.message}) — using defaults"
+    {}
+
+config = loadConfig() or {}
+
 CFG =
   backSock: process.env.ADA_BACK_SOCK or
     "#{process.env.XDG_RUNTIME_DIR or '/tmp'}/ada-back.sock"
   perceptionSock: process.env.ADA_PERCEPTION_SOCK or
     '/workspace/perception-voice/perception.sock'
   presenceSock: process.env.ADA_PRESENCE_SOCK or '/tmp/presence-voice.sock'
-  voice: process.env.ADA_VOICE or 'ada'
-  model: process.env.ADA_MODEL or 'lm-studio:google/gemma-4-e4b'
+  voice: process.env.ADA_VOICE or config.voice or 'ada'
+  model: process.env.ADA_MODEL or process.env.FAV_LOCAL_LLM
   wake: new RegExp(process.env.ADA_WAKE or '\\bada\\b', 'i')
   convWindowMs: Number(process.env.ADA_CONV_WINDOW_MS or 8000)
   activityDir: process.env.ADA_ACTIVITY_DIR or '/workspace/mari/activity'
@@ -173,7 +188,9 @@ class Speaker
     @queue.push { text: clean, turn, schedule }
     @pump()
 
-  clear: -> @queue.length = 0
+  clear: ->
+    @queue.length = 0
+    broadcast { ev: 'caption', who: 'ada', text: '' }
 
   pump: ->
     return if @pumping
@@ -183,6 +200,8 @@ class Speaker
         { text, turn, schedule } = @queue.shift()
         continue if turn?.cancelled
         setState speaking: true
+        # Closed captions on the avatar: one line per spoken sentence.
+        broadcast { ev: 'caption', who: 'ada', text }
         t0 = performance.now()
         try
           await speakOnce CFG.voice, text, schedule
@@ -193,6 +212,8 @@ class Speaker
     finally
       @pumping = false
       setState speaking: false
+      # Clear caption after the queue drains (avatar lingers briefly for readability).
+      broadcast { ev: 'caption', who: 'ada', text: '' } unless @queue.length
       unless currentTurn
         convWindowUntil = Date.now() + CFG.convWindowMs
         setTimeout maybeIdle, CFG.convWindowMs + 50

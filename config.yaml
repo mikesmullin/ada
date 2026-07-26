@@ -1,0 +1,8 @@
+# Ada's user-tunable settings. Edit and restart ada-back to apply
+# (systemctl --user restart ada-back). Each of these can still be
+# overridden per-run with an env var of the same name (ADA_VOICE, ...)
+# for quick one-off testing without touching this file.
+
+# Voice preset name, as defined in /workspace/voice/config.yaml's `voices:`
+# map (e.g. ada, nicole, bella, norman, lessac, ...).
+voice: nova
