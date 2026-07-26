@@ -557,11 +557,13 @@ export fn frame() void {
         var cap_text: [caption_mod.MAX][caption_mod.TEXT_CAP]u8 = undefined;
         var cap_len: [caption_mod.MAX]usize = @splat(0);
         var cap_born: [caption_mod.MAX]f64 = @splat(0);
-        const cap_n = G.captions.snapshot(G.io, &cap_text, &cap_len, &cap_born);
+        var cap_solid: [caption_mod.MAX]f32 = @splat(0);
+        var cap_life: [caption_mod.MAX]f32 = @splat(0);
+        const cap_n = G.captions.snapshot(G.io, &cap_text, &cap_len, &cap_born, &cap_solid, &cap_life);
         if (cap_n > 0) {
             const font_size = @max(12.0, @min(18.0, sw * 0.045));
             G.font.beginFrame();
-            caption_mod.drawStack(&G.font, sw, sh, font_size, now, &cap_text, &cap_len, &cap_born, cap_n);
+            caption_mod.drawStack(&G.font, sw, sh, font_size, now, &cap_text, &cap_len, &cap_born, &cap_solid, &cap_life, cap_n);
             G.font.flush(sw, sh);
         }
     }

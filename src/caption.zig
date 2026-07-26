@@ -2,9 +2,9 @@
 //!
 //! Each spoken sentence is a particle:
 //!   - born_at wall time (0 = dead slot)
-//!   - 0..1s solid, then fade to transparent by 5s (eased)
+//!   - solid hold scales with word count (longer captions stay readable longer)
+//!   - then fade to transparent (eased), then GC
 //!   - stack bottom-up: newest on the bottom
-//!   - GC removes finished particles (compact, preserves birth order)
 
 const std = @import("std");
 const ease = @import("ease.zig");
@@ -13,16 +13,49 @@ const sdf_font_mod = @import("sdf_font.zig");
 pub const TEXT_CAP = 256;
 pub const MAX = 16;
 
-/// Solid hold, then fade window (matches user spec).
-pub const SOLID_S: f32 = 1.0;
-pub const LIFE_S: f32 = 5.0;
+/// Solid hold = clamp(BASE + PER_WORD * n_words, MIN, MAX), then FADE seconds of decay.
+pub const SOLID_BASE_S: f32 = 0.75;
+pub const SOLID_PER_WORD_S: f32 = 0.30; // ~200 wpm reading allowance
+pub const SOLID_MIN_S: f32 = 1.0;
+pub const SOLID_MAX_S: f32 = 8.0;
+pub const FADE_S: f32 = 3.5;
 
 const Particle = struct {
     /// Seconds from avatar start clock; 0 = dead (Game9 `born_at == 0`).
     born_at: f64 = 0,
     text: [TEXT_CAP]u8 = undefined,
     text_len: usize = 0,
+    /// Precomputed at spawn from word count.
+    solid_s: f32 = SOLID_MIN_S,
+    life_s: f32 = SOLID_MIN_S + FADE_S,
 };
+
+/// Whitespace-separated word count (empty → 0).
+pub fn countWords(text: []const u8) u32 {
+    var n: u32 = 0;
+    var in_word = false;
+    for (text) |b| {
+        const is_ws = b == ' ' or b == '\t' or b == '\n' or b == '\r';
+        if (is_ws) {
+            in_word = false;
+        } else if (!in_word) {
+            in_word = true;
+            n += 1;
+        }
+    }
+    return n;
+}
+
+/// How long the caption stays fully opaque before fading.
+pub fn solidSeconds(word_count: u32) f32 {
+    const wc: f32 = @floatFromInt(@max(word_count, 1));
+    const s = SOLID_BASE_S + SOLID_PER_WORD_S * wc;
+    return @min(SOLID_MAX_S, @max(SOLID_MIN_S, s));
+}
+
+pub fn lifeSeconds(word_count: u32) f32 {
+    return solidSeconds(word_count) + FADE_S;
+}
 
 pub const System = struct {
     items: [MAX]Particle = @splat(.{}),
@@ -44,7 +77,13 @@ pub const System = struct {
             self.count -= 1;
         }
 
-        var p: Particle = .{ .born_at = if (now <= 0) 0.001 else now };
+        const wc = countWords(text);
+        const solid = solidSeconds(wc);
+        var p: Particle = .{
+            .born_at = if (now <= 0) 0.001 else now,
+            .solid_s = solid,
+            .life_s = solid + FADE_S,
+        };
         const n = @min(text.len, TEXT_CAP);
         @memcpy(p.text[0..n], text[0..n]);
         p.text_len = n;
@@ -53,26 +92,26 @@ pub const System = struct {
     }
 
     /// Game9 `Particle__progress`: 0 at birth, 1 at death.
-    pub fn progress(born_at: f64, now: f64) f32 {
-        if (born_at == 0) return 1.0;
+    pub fn progress(born_at: f64, life_s: f32, now: f64) f32 {
+        if (born_at == 0 or life_s <= 0) return 1.0;
         const age: f32 = @floatCast(now - born_at);
-        return ease.clamp01(age / LIFE_S);
+        return ease.clamp01(age / life_s);
     }
 
-    /// Opacity: full for SOLID_S, then ease toward 0 through LIFE_S.
+    /// Opacity: full for solid_s, then ease toward 0 through life_s.
     /// Fade uses easeInQuad so text stays readable longer, then drops off.
-    pub fn alpha(born_at: f64, now: f64) f32 {
+    pub fn alpha(born_at: f64, solid_s: f32, life_s: f32, now: f64) f32 {
         if (born_at == 0) return 0.0;
         const age: f32 = @floatCast(now - born_at);
-        if (age <= SOLID_S) return 1.0;
-        if (age >= LIFE_S) return 0.0;
-        const fade_t = (age - SOLID_S) / (LIFE_S - SOLID_S);
-        // fade_t 0→1 maps alpha 1→0 with ease-in (slow start, fast end).
+        if (age <= solid_s) return 1.0;
+        if (age >= life_s) return 0.0;
+        const fade = life_s - solid_s;
+        if (fade <= 0) return 0.0;
+        const fade_t = (age - solid_s) / fade;
         return 1.0 - ease.easy(.in_quad, fade_t);
     }
 
-    /// Expire finished particles; compact in birth order (Game9 swap-last
-    /// would scramble stack order — captions need chronological order).
+    /// Expire finished particles; compact in birth order.
     pub fn update(self: *System, io: std.Io, now: f64) void {
         self.mu.lockUncancelable(io);
         defer self.mu.unlock(io);
@@ -81,7 +120,7 @@ pub const System = struct {
         var i: usize = 0;
         while (i < self.count) : (i += 1) {
             const p = self.items[i];
-            if (p.born_at == 0 or progress(p.born_at, now) >= 1.0) continue;
+            if (p.born_at == 0 or progress(p.born_at, p.life_s, now) >= 1.0) continue;
             if (w != i) self.items[w] = p;
             w += 1;
         }
@@ -101,6 +140,8 @@ pub const System = struct {
         out_text: *[MAX][TEXT_CAP]u8,
         out_len: *[MAX]usize,
         out_born: *[MAX]f64,
+        out_solid: *[MAX]f32,
+        out_life: *[MAX]f32,
     ) usize {
         self.mu.lockUncancelable(io);
         defer self.mu.unlock(io);
@@ -110,6 +151,8 @@ pub const System = struct {
             const p = self.items[i];
             out_len[i] = p.text_len;
             out_born[i] = p.born_at;
+            out_solid[i] = p.solid_s;
+            out_life[i] = p.life_s;
             if (p.text_len > 0) {
                 @memcpy(out_text[i][0..p.text_len], p.text[0..p.text_len]);
             }
@@ -118,7 +161,7 @@ pub const System = struct {
     }
 };
 
-/// Draw stacked captions: newest at the bottom. Returns nothing.
+/// Draw stacked captions: newest at the bottom.
 pub fn drawStack(
     font: *sdf_font_mod.SdfFont,
     screen_w: f32,
@@ -128,6 +171,8 @@ pub fn drawStack(
     texts: *const [MAX][TEXT_CAP]u8,
     lens: *const [MAX]usize,
     borns: *const [MAX]f64,
+    solids: *const [MAX]f32,
+    lives: *const [MAX]f32,
     n: usize,
 ) void {
     if (!font.ok or n == 0 or font_size <= 0) return;
@@ -137,7 +182,6 @@ pub fn drawStack(
     const max_w_frac: f32 = 0.92;
     const rgb: [3]f32 = .{ 0.92, 0.97, 1.0 };
 
-    // First pass: heights (newest last in arrays).
     var heights: [MAX]f32 = @splat(0);
     var i: usize = 0;
     while (i < n) : (i += 1) {
@@ -145,14 +189,13 @@ pub fn drawStack(
         heights[i] = font.measureWrappedHeight(texts[i][0..lens[i]], font_size, screen_w * max_w_frac);
     }
 
-    // Stack from bottom: newest (index n-1) sits on the bottom pad.
     var cursor_bottom = screen_h - bottom_pad;
     var idx: isize = @intCast(n);
     idx -= 1;
     while (idx >= 0) : (idx -= 1) {
         const ui: usize = @intCast(idx);
         if (lens[ui] == 0) continue;
-        const a = System.alpha(borns[ui], now);
+        const a = System.alpha(borns[ui], solids[ui], lives[ui], now);
         if (a <= 0.01) {
             cursor_bottom -= heights[ui] + gap;
             continue;
