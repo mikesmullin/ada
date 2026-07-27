@@ -43,10 +43,12 @@ confirm:
     - "belay that order"
   timeout_ms: 60000
 
-# Progress narrator (M5).
+# Progress narrator (M5) — Ada speaks status while long tools run.
 progress:
   interval_ms: 8000
   cancel_prefix: "cancel that tool"
+  # Extra tool names beyond the built-in long list (browser, activity, app).
+  # tools: []
 
 # Background planner (M6).
 planner:

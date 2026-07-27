@@ -24,8 +24,12 @@ import { ensureBrainMcp, registerBrainTools } from './lib/mcp-brain.coffee'
 import { ensureTodoMcp, registerTodoTools } from './lib/mcp-todo.coffee'
 import { checkToolGate } from './lib/tool-gate.coffee'
 import { tomConfirm, feedUtterance as tomFeedUtterance, isWaiting as tomIsWaiting } from './lib/tom.coffee'
+import {
+  startProgress, stopProgress, isWaiting as progressIsWaiting
+  feedUtterance as progressFeedUtterance, isLongTool
+} from './lib/progress.coffee'
 
-# PLAN2 W3/M4: allowlist (re-read every call) + risk + Tom spoken confirm.
+# PLAN2 W3–M5: allowlist + risk + Tom + progress ticker for long tools.
 wrapToolsWithGateAndLogging = (agent) ->
   for name in Object.keys agent.tools
     do (name) ->
@@ -67,14 +71,52 @@ wrapToolsWithGateAndLogging = (agent) ->
             return gate.message
         else
           log "tool → #{name} [#{gate.risk}] #{argPreview}"
+
+        # Long tools: progress ticks + cancel phrase (PLAN2 M5).
+        useProgress = isLongTool name, CFG.progressTools
+        progress = null
+        if useProgress
+          progress = startProgress
+            toolName: name
+            args: args
+            intervalMs: CFG.progressIntervalMs
+            cancelPrefix: CFG.progressCancelPrefix
+            speakOnce: speakOnce
+            broadcast: broadcast
+            voice: CFG.voice
+            log: log
+          # Shell-backed tools can register a kill via ctx.__progressSetKill
+          if ctx?
+            ctx.__progressSetKill = progress.setKill
+
         try
-          result = await fn ctx, args
-          preview = String(result ? '').replace(/\s+/g, ' ').slice(0, 240)
+          if useProgress
+            toolP = Promise.resolve().then(-> fn ctx, args)
+              .then (r) -> { kind: 'done', r }
+              .catch (e) -> { kind: 'error', e }
+            result = await Promise.race [
+              toolP
+              progress.cancelPromise.then (c) -> { kind: 'cancel', c }
+            ]
+            if result.kind is 'cancel'
+              # Detach tool promise so a late throw is not unhandled.
+              toolP.catch -> null
+              log "tool ✗ #{name} cancelled by user"
+              return "cancelled by user: #{name} was aborted. " +
+                "Do not invent partial success; say the tool was cancelled."
+            if result.kind is 'error'
+              throw result.e
+            out = result.r
+          else
+            out = await fn ctx, args
+          preview = String(out ? '').replace(/\s+/g, ' ').slice(0, 240)
           log "tool ← #{name} #{preview}"
-          result
+          out
         catch e
           log "tool ✗ #{name} #{e.message}"
           throw e
+        finally
+          progress?.stop()
       wrapped._name = fn._name
       wrapped._description = fn._description
       wrapped._properties = fn._properties
@@ -156,6 +198,11 @@ CFG =
   denyPhrases: config.confirm?.deny_phrases or ['belay that order']
   confirmTimeoutMs: Number(process.env.ADA_CONFIRM_TIMEOUT_MS or
     config.confirm?.timeout_ms or 60000)
+  progressIntervalMs: Number(process.env.ADA_PROGRESS_INTERVAL_MS or
+    config.progress?.interval_ms or 8000)
+  progressCancelPrefix: process.env.ADA_PROGRESS_CANCEL or
+    config.progress?.cancel_prefix or 'cancel that tool'
+  progressTools: config.progress?.tools or []
   # Gemma-4 ~120K budget; reserve room for tools + completion (PLAN2 W7).
   contextMaxTokens: Number(process.env.ADA_CONTEXT_MAX_TOKENS or
     config.context?.max_tokens or 120000)
@@ -393,10 +440,11 @@ runCmd = (cmd, args) ->
     { ok: false, out: "#{cmd}: #{e.message}" }
 
 # Launcher-style commands may run long (apps, sessions): report started
-# rather than hanging the turn.
-shellTool = (shellLine, timeoutMs = 10000) ->
+# rather than hanging the turn. Optional setKill for progress cancel (M5).
+shellTool = (shellLine, timeoutMs = 10000, setKill = null) ->
   try
     child = spawn 'bash', ['-c', shellLine]
+    setKill?(-> child.kill?('SIGTERM'))
     timeout = new Promise (r) -> setTimeout (-> r 'TIMEOUT'), timeoutMs
     result = await Promise.race [child.promise, timeout]
     return "started (still running): #{shellLine}" if result is 'TIMEOUT'
@@ -532,7 +580,7 @@ registerTools = (agent) ->
     , ['id'], (ctx, { id }) ->
       line = activities.commands[id]
       return "unknown command: #{id}" unless line
-      shellTool line
+      shellTool line, 10000, ctx?.__progressSetKill
 
   # -- browser control, delegated to the ada-browser sub-agent ---------------
   agent.Tool 'control_browser',
@@ -763,6 +811,12 @@ onWordsEvent = (msg) ->
     if tomIsWaiting()
       log "tom heard: #{msg.text}"
       tomFeedUtterance msg.text or ''
+      convWindowUntil = Date.now() + CFG.convWindowMs
+      setState active: true
+      return
+    # Long-tool progress: only cancel phrase is accepted (hold other speech).
+    if progressIsWaiting()
+      progressFeedUtterance msg.text or ''
       convWindowUntil = Date.now() + CFG.convWindowMs
       setState active: true
       return

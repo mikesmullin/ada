@@ -8,7 +8,14 @@ export spawn = (cmd, args = []) ->
     stdout: ''
     stderr: ''
     promise: null
+    proc: null
+    kill: null
   proc = _spawn cmd, args, stdio: 'pipe'
+  result.proc = proc
+  result.kill = (signal = 'SIGTERM') ->
+    try
+      proc.kill signal
+    catch e then null
   proc.stdout.on 'data', (d) -> result.stdout += d
   proc.stderr.on 'data', (d) -> result.stderr += d
   result.promise = new Promise (resolve, reject) ->
