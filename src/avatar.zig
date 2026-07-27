@@ -107,6 +107,10 @@ const G = struct {
     var solo_speak: bool = false;
     var solo_pulse: f64 = -10;
     var solo_caption_i: u32 = 0;
+
+    /// Held open for process lifetime (exclusive flock). Closed + unlinked on clean exit.
+    var lock_file: ?std.Io.File = null;
+    var lock_owned: bool = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -116,11 +120,14 @@ const G = struct {
 //   <unix_started_at>\n
 // Refuse if another live avatar is recorded / holds the lock. Stale files
 // (dead pid and free lock) are taken over — same idea as ada-back .back.lock.
+// Clean exit (window close / SIGQUIT / SIGINT / SIGTERM) unlinks the file.
 
 const LOCK_PATH = "/workspace/ada/.avatar.lock";
+const LOCK_PATH_Z: [:0]const u8 = LOCK_PATH;
 
 extern "c" fn kill(pid: c_int, sig: c_int) c_int;
 extern "c" fn time(tloc: ?*i64) i64;
+extern "c" fn unlink(path: [*:0]const u8) c_int;
 
 fn pidIsAlive(pid: std.posix.pid_t) bool {
     if (pid <= 0) return false;
@@ -164,7 +171,7 @@ fn acquireInstanceLock(io: std.Io) void {
         std.process.exit(1);
     };
     // Keep fd open for process lifetime so the exclusive lock is released by
-    // the kernel on any exit (including crash). Do not close(file).
+    // the kernel on crash even if we never reach releaseInstanceLock.
 
     const meta = readLockMeta(io, file);
     const got_lock = file.tryLock(io, .exclusive) catch false;
@@ -197,6 +204,49 @@ fn acquireInstanceLock(io: std.Io) void {
         file.close(io);
         std.process.exit(1);
     };
+
+    G.lock_file = file;
+    G.lock_owned = true;
+}
+
+/// Close the exclusive lock fd and remove the pidfile. Idempotent.
+/// Safe to call from sokol cleanup and from signal handlers (uses only
+/// async-signal-safe ops on the hot path after flags are checked).
+fn releaseInstanceLock() void {
+    if (!G.lock_owned) return;
+    G.lock_owned = false;
+
+    // Close first so flock is released before another process recreates the path.
+    if (G.lock_file) |file| {
+        G.lock_file = null;
+        // Prefer raw close in signal context; Io close may not be signal-safe.
+        _ = std.c.close(file.handle);
+    }
+    _ = unlink(LOCK_PATH_Z.ptr);
+}
+
+/// SIGQUIT (awesome titlebar X often maps here), SIGINT, SIGTERM: drop lock and exit.
+fn onFatalSignal(sig: std.posix.SIG) callconv(.c) void {
+    releaseInstanceLock();
+    // Re-raise with default disposition so the shell sees the real signal.
+    const default_act = std.posix.Sigaction{
+        .handler = .{ .handler = std.posix.SIG.DFL },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    std.posix.sigaction(sig, &default_act, null);
+    std.posix.raise(sig) catch {};
+}
+
+fn installLockSignalHandlers() void {
+    const act = std.posix.Sigaction{
+        .handler = .{ .handler = onFatalSignal },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    std.posix.sigaction(.QUIT, &act, null);
+    std.posix.sigaction(.INT, &act, null);
+    std.posix.sigaction(.TERM, &act, null);
 }
 
 // ---------------------------------------------------------------------------
@@ -708,6 +758,8 @@ export fn event(ev: [*c]const sapp.Event) void {
 }
 
 export fn cleanup() void {
+    // Window close / normal sokol teardown (titlebar X, q/esc quit path).
+    releaseInstanceLock();
     if (G.font.ok) G.font.deinit();
     sg.shutdown();
 }
@@ -721,6 +773,7 @@ pub fn run(io: std.Io, alloc: std.mem.Allocator, opts: Options, log: *std.Io.Wri
     G.start_ts = std.Io.Clock.Timestamp.now(io, .awake);
 
     acquireInstanceLock(io);
+    installLockSignalHandlers();
 
     if (!opts.solo) {
         // fail fast, with an actionable message per missing service (§9.3)
