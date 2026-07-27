@@ -23,117 +23,144 @@ import { initBrowserAgent, runBrowserAgent } from './ada-browser.coffee'
 import { ensureBrainMcp, registerBrainTools } from './lib/mcp-brain.coffee'
 import { ensureTodoMcp, registerTodoTools } from './lib/mcp-todo.coffee'
 import { checkToolGate } from './lib/tool-gate.coffee'
-import { tomConfirm, feedUtterance as tomFeedUtterance, isWaiting as tomIsWaiting } from './lib/tom.coffee'
+import {
+  joinToolWave, registerToolWaveGate, runTomInWave, waitWaveThenRun
+  feedUtterance as tomFeedUtterance, isWaiting as tomIsWaiting
+  denyAllPending as tomDenyAllPending
+} from './lib/tom.coffee'
 import {
   startProgress, stopProgress, isWaiting as progressIsWaiting
   feedUtterance as progressFeedUtterance, isLongTool
 } from './lib/progress.coffee'
 import { announceTool } from './lib/tool-announce.coffee'
+import {
+  loadHistory, rewriteMessages, compactAndPersist, stampNow, defaultPath as ctxLogDefaultPath
+} from './lib/ctx-log.coffee'
 
 # PLAN2 W3–M5: allowlist + risk + Tom + progress ticker for long tools.
+# Parallel tools share a wave: Tom confirms serially; no tool body runs until
+# every Tom decision in the wave is done (approve/deny per call).
 wrapToolsWithGateAndLogging = (agent) ->
   for name in Object.keys agent.tools
     do (name) ->
       fn = agent.tools[name]
       wrapped = (ctx, args) ->
+        # Sync join so Promise.all siblings share one wave before any await.
+        wave = joinToolWave()
         argPreview = try JSON.stringify(args ? {}).slice(0, 240) catch e then String(args)
-        gate = checkToolGate
-          toolName: name
-          args: args
-          allowlistPath: CFG.allowlistPath
-          configRisk: CFG.toolRisk
-          confirmEnabled: CFG.confirmEnabled
-        unless gate.ok
-          if gate.needsTom and CFG.confirmEnabled
-            log "tool ? #{name} [#{gate.risk}] needs Tom #{argPreview}"
-            setState active: true
-            # Pause Ada's speech queue so Tom owns the voice + captions.
-            speaker.clear()
-            stopSpeech()
-            tom = await tomConfirm
+        registered = false
+        needsTom = false
+        try
+          # Yield once so every parallel tool has joined the wave.
+          await Promise.resolve()
+
+          gate = checkToolGate
+            toolName: name
+            args: args
+            allowlistPath: CFG.allowlistPath
+            configRisk: CFG.toolRisk
+            confirmEnabled: CFG.confirmEnabled
+
+          needsTom = (not gate.ok) and gate.needsTom and CFG.confirmEnabled
+          registerToolWaveGate wave, needsTom
+          registered = true
+
+          unless gate.ok
+            if needsTom
+              log "tool ? #{name} [#{gate.risk}] needs Tom (queued) #{argPreview}"
+              setState active: true
+              # Pause Ada speech before this Tom session owns voice + captions.
+              speaker.clear()
+              stopSpeech()
+              tom = await runTomInWave wave,
+                toolName: name
+                args: args
+                risk: gate.risk
+                speakOnce: speakOnce
+                stopSpeech: stopSpeech
+                broadcast: broadcast
+                voiceTom: CFG.voiceTom
+                denyPhrases: CFG.denyPhrases
+                timeoutMs: CFG.confirmTimeoutMs
+                log: log
+              unless tom.approved
+                log "tool ✗ #{name} Tom #{tom.reason}"
+                return "Tom denied the action (#{tom.reason}). Do not invent success. " +
+                  "Briefly tell Mike the action did not run; do not repeat Tom's passphrase."
+              log "tool → #{name} [#{gate.risk}] Tom approved #{argPreview}"
+            else
+              # Hard deny (confirm off / not allowlisted without Tom path).
+              await waitWaveThenRun wave
+              log "tool ✗ #{name} blocked risk=#{gate.risk} #{argPreview}"
+              return gate.message
+          else
+            # Low-risk: wait for any Tom siblings in this wave before running.
+            await waitWaveThenRun wave
+            log "tool → #{name} [#{gate.risk}] #{argPreview}"
+
+          # Pre-tool announce — interrupt so Ada cuts any residual Tom audio.
+          try
+            line = await announceTool
               toolName: name
               args: args
-              risk: gate.risk
+              model: CFG.model
+              log: log
+            if line
+              speaker.enqueue line, currentTurn, 'interrupt'
+          catch e
+            log "announce error: #{e.message}"
+
+          # Long tools: progress ticks + cancel phrase (PLAN2 M5).
+          useProgress = isLongTool name, CFG.progressTools
+          progress = null
+          if useProgress
+            progress = startProgress
+              toolName: name
+              args: args
+              intervalMs: CFG.progressIntervalMs
+              cancelPrefix: CFG.progressCancelPrefix
               speakOnce: speakOnce
               broadcast: broadcast
-              voiceTom: CFG.voiceTom
-              denyPhrases: CFG.denyPhrases
-              timeoutMs: CFG.confirmTimeoutMs
+              voice: CFG.voice
               log: log
-            unless tom.approved
-              log "tool ✗ #{name} Tom #{tom.reason}"
-              # Short deterministic result for Ada — Tom already spoke; avoid
-              # Ada re-explaining the phrase (she was "talking for Tom").
-              return "Tom denied the action (#{tom.reason}). Do not invent success. " +
-                "Briefly tell Mike the action did not run; do not repeat Tom's passphrase."
-            log "tool → #{name} [#{gate.risk}] Tom approved #{argPreview}"
-          else
-            log "tool ✗ #{name} blocked risk=#{gate.risk} #{argPreview}"
-            return gate.message
-        else
-          log "tool → #{name} [#{gate.risk}] #{argPreview}"
+            if ctx?
+              ctx.__progressSetKill = progress.setKill
 
-        # Pre-tool announce (succinct status in Ada's voice, then tool runs).
-        # Enqueue so it plays without wiping in-flight speech; captions match Ada.
-        try
-          line = await announceTool
-            toolName: name
-            args: args
-            model: CFG.model
-            log: log
-          if line
-            speaker.enqueue line, currentTurn, 'enqueue'
-        catch e
-          log "announce error: #{e.message}"
-
-        # Long tools: progress ticks + cancel phrase (PLAN2 M5).
-        useProgress = isLongTool name, CFG.progressTools
-        progress = null
-        if useProgress
-          progress = startProgress
-            toolName: name
-            args: args
-            intervalMs: CFG.progressIntervalMs
-            cancelPrefix: CFG.progressCancelPrefix
-            speakOnce: speakOnce
-            broadcast: broadcast
-            voice: CFG.voice
-            log: log
-          # Shell-backed tools can register a kill via ctx.__progressSetKill
-          if ctx?
-            ctx.__progressSetKill = progress.setKill
-
-        try
-          if useProgress
-            toolP = Promise.resolve().then(-> fn ctx, args)
-              .then (r) -> { kind: 'done', r }
-              .catch (e) -> { kind: 'error', e }
-            result = await Promise.race [
-              toolP
-              progress.cancelPromise.then (c) -> { kind: 'cancel', c }
-            ]
-            if result.kind is 'cancel'
-              # Detach tool promise so a late throw is not unhandled.
-              toolP.catch -> null
-              # Tool-result content for the model (same path as a normal return).
-              out = "error: user aborted tool #{name}. " +
-                "The operation was cancelled mid-flight and did not complete successfully. " +
-                "Do not invent partial success; tell Mike it was cancelled."
-              log "tool ← #{name} #{out}"
-              return out
-            if result.kind is 'error'
-              throw result.e
-            out = result.r
-          else
-            out = await fn ctx, args
-          preview = String(out ? '').replace(/\s+/g, ' ').slice(0, 240)
-          log "tool ← #{name} #{preview}"
-          out
-        catch e
-          log "tool ✗ #{name} #{e.message}"
-          throw e
+          try
+            if useProgress
+              toolP = Promise.resolve().then(-> fn ctx, args)
+                .then (r) -> { kind: 'done', r }
+                .catch (e) -> { kind: 'error', e }
+              result = await Promise.race [
+                toolP
+                progress.cancelPromise.then (c) -> { kind: 'cancel', c }
+              ]
+              if result.kind is 'cancel'
+                toolP.catch -> null
+                out = "error: user aborted tool #{name}. " +
+                  "The operation was cancelled mid-flight and did not complete successfully. " +
+                  "Do not invent partial success; tell Mike it was cancelled."
+                log "tool ← #{name} #{out}"
+                return out
+              if result.kind is 'error'
+                throw result.e
+              out = result.r
+            else
+              out = await fn ctx, args
+            preview = String(out ? '').replace(/\s+/g, ' ').slice(0, 240)
+            log "tool ← #{name} #{preview}"
+            out
+          catch e
+            log "tool ✗ #{name} #{e.message}"
+            throw e
+          finally
+            progress?.stop()
         finally
-          progress?.stop()
+          # If we crashed before registering, do not leave the wave stuck.
+          unless registered
+            try
+              registerToolWaveGate wave, false
+            catch e then null
       wrapped._name = fn._name
       wrapped._description = fn._description
       wrapped._properties = fn._properties
@@ -196,6 +223,9 @@ CFG =
   sfxDir: new URL('../sfx/', import.meta.url).pathname
   # Soft cap on recent turns kept for prompt context (token compaction may drop more).
   historyMax: Number(process.env.ADA_HISTORY_MAX or config.history_max or 48)
+  # Persistent context-window YAML (gl1-style messages; survives ada-back restart).
+  ctxLogPath: process.env.ADA_CTX_LOG or config.context?.log or
+    ctxLogDefaultPath(ADA_ROOT)
   brainPath: process.env.ADA_BRAIN or process.env.BRAIN_ROOT or
     config.brain_path or "#{ADA_ROOT}/db"
   brainCwd: process.env.ADA_BRAIN_CWD or ADA_ROOT
@@ -567,23 +597,6 @@ registerTools = (agent) ->
         hour: 'numeric', minute: '2-digit', second: '2-digit', timeZoneName: 'short'
       "#{local} (timezone #{tz}; ISO #{now.toISOString()})"
 
-  # -- TEMPORARY M5 test tool (remove after progress/cancel verified) --------
-  agent.Tool 'mock_slow_tool',
-    'TEMPORARY test-only tool with no real side effects: waits at least 60 seconds ' +
-    'then returns ok. Call this when Mike asks to test progress updates or ' +
-    'cancel-that-tool. Do not use it for real work.',
-    label: { type: 'string', description: 'optional short label for logs/progress' }
-  , [], (ctx, { label }) ->
-    tag = String(label or 'mock wait').replace(/\s+/g, ' ').trim().slice(0, 40) or 'mock wait'
-    cancelled = false
-    ctx?.__progressSetKill?(-> cancelled = true)
-    deadline = Date.now() + 60000
-    while Date.now() < deadline
-      return "error: user aborted tool mock_slow_tool (#{tag})." if cancelled
-      await new Promise (r) -> setTimeout r, 250
-    return "error: user aborted tool mock_slow_tool (#{tag})." if cancelled
-    "ok: mock_slow_tool finished after 60 seconds (#{tag}). No real work was done."
-
   # -- app launching ---------------------------------------------------------
   # Open-ended but shell-safe (mari's `!` SHELL-mode semantics): the app
   # name must be one bare token — no spaces, slashes, or shell metachars —
@@ -698,11 +711,23 @@ BASE_PROMPT = '''
 
 SYSTEM_PROMPT = BASE_PROMPT + loadSoul()
 
+# Conversation context — loaded from logs/ada.yaml on startup (persists across restarts).
 history = []
 currentTurn = null
 turnCounter = 0
 # Set when front-trim drops older turns so the model knows history is incomplete.
 compactionNotice = null
+
+# Restore prior session context before the first turn (never wipe on process start).
+try
+  restored = loadHistory CFG.ctxLogPath
+  if restored.length
+    history = restored
+    console.error "ctx-log: restored #{history.length} messages from #{CFG.ctxLogPath}"
+  else
+    console.error "ctx-log: empty or new (#{CFG.ctxLogPath})"
+catch e
+  console.error "ctx-log: restore failed: #{e.message}"
 
 # Rough token estimate (chars/4) until a real tokenizer is wired.
 estimateTokens = (s) -> Math.ceil(String(s or '').length / 4)
@@ -792,10 +817,15 @@ runTurn = (utt, gate) ->
   splitter.flush()
 
   unless turn.cancelled
-    history.push { who: 'user', text: utt.text }
-    history.push { who: 'ada', text: turn.reply.trim() } if turn.reply.trim()
-    # Keep a generous in-memory ring; token compaction applies at prompt time.
-    history.shift() while history.length > Math.max(CFG.historyMax * 4, 64)
+    history.push { who: 'user', text: utt.text, ts: stampNow() }
+    if turn.reply.trim()
+      history.push { who: 'ada', text: turn.reply.trim(), ts: stampNow() }
+    # Ring + disk: persist full window; compaction logrotates into ada.archive.yaml
+    # (unlike gl1, we never truncate the log on process start).
+    maxRing = Math.max CFG.historyMax * 4, 64
+    { history: history, dropped } = compactAndPersist CFG.ctxLogPath, history, maxRing
+    if dropped.length
+      log "turn #{turn.id}: ctx-log rotated #{dropped.length} messages → archive"
     if compactionNotice
       log "turn #{turn.id}: context compacted (front-trim active)"
 
@@ -814,6 +844,13 @@ runTurn = (utt, gate) ->
     "speech_done=#{ms l.lastAudioDone}#{if turn.cancelled then ' (cancelled)' else ''}"
 
 cancelAll = (reason) ->
+  # Avatar short-click: belay every remaining Tom challenge (current + queue).
+  if tomIsWaiting() or reason is 'click'
+    if tomDenyAllPending(reason or 'click')
+      log "tom: denied all pending (#{reason or 'click'}) — as belay that order"
+      try
+        broadcast { ev: 'caption', who: 'tom', text: '' }
+      catch e then null
   if currentTurn
     log "cancel (#{reason}): turn #{currentTurn.id}"
     currentTurn.cancelled = true
@@ -932,6 +969,7 @@ main = ->
 
   todoOk = await ensureTodoMcp shared: CFG.taskShared
   log if todoOk then "todo mcp ready (#{CFG.taskShared})" else 'todo mcp unavailable'
+  log "ctx-log: #{CFG.ctxLogPath} (#{history.length} messages in memory)"
 
   startAvatarServer()
   connectWords()

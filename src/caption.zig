@@ -2,9 +2,17 @@
 //!
 //! Each spoken sentence is a particle:
 //!   - born_at wall time (0 = dead slot)
-//!   - solid hold scales with word count (longer captions stay readable longer)
+//!   - solid hold scales with word count (reading allowance)
 //!   - then fade to transparent (eased), then GC
 //!   - stack bottom-up: newest on the bottom
+//!
+//! Parent chain (Ada multi-sentence captions):
+//!   Each new particle is "parented" to the previous live one. Decay (fade)
+//!   cannot start until BOTH (a) its own word-count solid hold has elapsed and
+//!   (b) the parent has fully expired. That extends attack/sustain only —
+//!   release duration stays FADE_S. Prevents a long early line from outlasting
+//!   a short later line in a confusing way: you finish reading the long one
+//!   before the short trailing one begins to fade.
 
 const std = @import("std");
 const ease = @import("ease.zig");
@@ -25,8 +33,9 @@ const Particle = struct {
     born_at: f64 = 0,
     text: [TEXT_CAP]u8 = undefined,
     text_len: usize = 0,
-    /// Precomputed at spawn from word count.
+    /// Opaque hold (word-count base, possibly extended by parent expire).
     solid_s: f32 = SOLID_MIN_S,
+    /// Total lifetime = solid_s + FADE_S (fade length is always FADE_S).
     life_s: f32 = SOLID_MIN_S + FADE_S,
 };
 
@@ -46,7 +55,7 @@ pub fn countWords(text: []const u8) u32 {
     return n;
 }
 
-/// How long the caption stays fully opaque before fading.
+/// How long the caption stays fully opaque before fading (word-count only).
 pub fn solidSeconds(word_count: u32) f32 {
     const wc: f32 = @floatFromInt(@max(word_count, 1));
     const s = SOLID_BASE_S + SOLID_PER_WORD_S * wc;
@@ -55,6 +64,20 @@ pub fn solidSeconds(word_count: u32) f32 {
 
 pub fn lifeSeconds(word_count: u32) f32 {
     return solidSeconds(word_count) + FADE_S;
+}
+
+/// Solid hold for a new particle: at least word-count solid, and not before
+/// the previous particle fully expires (parent chain).
+pub fn solidWithParent(base_solid: f32, born_at: f64, parent_expire_at: ?f64) f32 {
+    var solid = base_solid;
+    if (parent_expire_at) |pe| {
+        const wait: f32 = @floatCast(pe - born_at);
+        if (wait > solid) solid = wait;
+    }
+    // Guard absurd holds if clocks go weird
+    if (solid < SOLID_MIN_S) solid = SOLID_MIN_S;
+    if (solid > 60.0) solid = 60.0;
+    return solid;
 }
 
 pub const System = struct {
@@ -77,10 +100,23 @@ pub const System = struct {
             self.count -= 1;
         }
 
+        const born = if (now <= 0) 0.001 else now;
         const wc = countWords(text);
-        const solid = solidSeconds(wc);
+        const base_solid = solidSeconds(wc);
+
+        // Parent = previous live particle (last in stack). Its life_s already
+        // includes any extension from *its* parent, so the chain composes.
+        var parent_expire: ?f64 = null;
+        if (self.count > 0) {
+            const parent = self.items[self.count - 1];
+            if (parent.born_at > 0) {
+                parent_expire = parent.born_at + @as(f64, parent.life_s);
+            }
+        }
+
+        const solid = solidWithParent(base_solid, born, parent_expire);
         var p: Particle = .{
-            .born_at = if (now <= 0) 0.001 else now,
+            .born_at = born,
             .solid_s = solid,
             .life_s = solid + FADE_S,
         };
@@ -100,6 +136,7 @@ pub const System = struct {
 
     /// Opacity: full for solid_s, then ease toward 0 through life_s.
     /// Fade uses easeInQuad so text stays readable longer, then drops off.
+    /// solid_s may be parent-extended; fade duration is still (life_s - solid_s) == FADE_S.
     pub fn alpha(born_at: f64, solid_s: f32, life_s: f32, now: f64) f32 {
         if (born_at == 0) return 0.0;
         const age: f32 = @floatCast(now - born_at);
@@ -127,10 +164,13 @@ pub const System = struct {
         self.count = w;
     }
 
+    /// Drop every live particle (thread-safe). Tom uses this so only one
+    /// security challenge line is visible at a time.
     pub fn clear(self: *System, io: std.Io) void {
         self.mu.lockUncancelable(io);
         defer self.mu.unlock(io);
         self.count = 0;
+        self.items = @splat(.{});
     }
 
     /// Snapshot live particles for the render thread (oldest → newest).

@@ -57,20 +57,68 @@ export normalizeSpeech = (text) ->
     .replace(/\s+/g, ' ')
     .trim()
 
-# True if spoken text contains the three words in order (allow extra fluff).
+# American Soundex (US census algorithm) — Whisper often returns a same-sound
+# spelling (lime/line, deer/dear, raven/ravin). Codes are letter + 3 digits.
+export soundex = (word) ->
+  w = String(word or '').toLowerCase().replace /[^a-z]/g, ''
+  return '' unless w.length
+  # Map consonants to digits; vowels / h / w / y are skipped (after first letter).
+  map =
+    b: '1', f: '1', p: '1', v: '1'
+    c: '2', g: '2', j: '2', k: '2', q: '2', s: '2', x: '2', z: '2'
+    d: '3', t: '3'
+    l: '4'
+    m: '5', n: '5'
+    r: '6'
+  first = w[0]
+  code = first.toUpperCase()
+  prev = map[first] or '0'
+  i = 1
+  while i < w.length and code.length < 4
+    ch = w[i]
+    d = map[ch]
+    if d
+      # Skip adjacent same codes (and those separated only by h/w).
+      if d isnt prev
+        code += d
+        prev = d
+    else if ch not in ['h', 'w']
+      # Vowel / y breaks adjacent-same rule
+      prev = '0'
+    i++
+  (code + '000').slice 0, 4
+
+# True if two words are the same spelling or same Soundex code.
+wordsSoundAlike = (a, b) ->
+  aa = String(a or '').toLowerCase()
+  bb = String(b or '').toLowerCase()
+  return true if aa is bb
+  sa = soundex aa
+  sb = soundex bb
+  sa.length is 4 and sa is sb
+
+# True if spoken text contains the three challenge words **in order**, each
+# matching by exact spelling or Soundex (extra words before/between/after OK).
 export matchesApprovePhrase = (spoken, phrase) ->
-  s = normalizeSpeech spoken
-  parts = normalizeSpeech(phrase).split ' '
-  return false unless parts.length is 3
-  # exact three-word utterance
-  return true if s is parts.join ' '
-  # allow surrounding words: ... calm otter bailey ...
-  rx = new RegExp("\\b#{parts[0]}\\s+#{parts[1]}\\s+#{parts[2]}\\b")
-  rx.test s
+  spokenWords = normalizeSpeech(spoken).split(' ').filter (w) -> w.length
+  want = normalizeSpeech(phrase).split(' ').filter (w) -> w.length
+  return false unless want.length is 3
+  return false unless spokenWords.length >= 3
+
+  # Greedy scan: find word0, then word1 after it, then word2 after that.
+  wi = 0
+  for sw in spokenWords
+    if wordsSoundAlike sw, want[wi]
+      wi += 1
+      return true if wi is 3
+  false
 
 export matchesDenyPhrase = (spoken, denyPhrases) ->
   s = normalizeSpeech spoken
   for p in denyPhrases or []
     d = normalizeSpeech p
     return true if d and (s is d or s.includes d)
+    # Soundex deny for the multi-word phrase as ordered sound-alike sequence.
+    if d and matchesApprovePhrase(spoken, d)
+      return true
   false

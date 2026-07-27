@@ -7,7 +7,6 @@ import { isAllowed } from './allowlist.coffee'
 # Mutations / browser = medium (Tom when confirm.enabled); pure reads = low.
 DEFAULT_RISK =
   current_time: 'low'
-  mock_slow_tool: 'low' # temporary M5 test tool — remove when done
   desk_light: 'low'
   pc_light_color: 'low'
   media_control: 'low'
@@ -23,6 +22,7 @@ DEFAULT_RISK =
   brain_graphql: 'low'
   brain_get_entity: 'low'
   brain_put_entity: 'medium'
+  brain_delete_entity: 'medium'
   brain_schema_methods: 'low'
   brain_method_invoke: 'medium'
   todo_lists: 'low'

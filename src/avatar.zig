@@ -277,21 +277,38 @@ fn setWmClass() void {
 // empty-line busy-spin (takeDelimiterExclusive returned "" at ~100k/s with
 // zero syscalls) that pinned a core and never delivered events. Plain
 // blocking read(2)/write(2) can't do that. The levels streams stay on
-// std.Io — they push continuously and block correctly.
-fn connectBackFd() !c_int {
+// std.Io for frame I/O — but *connect* also uses raw POSIX: Zig's
+// Io.Threaded unix connect path does not map ECONNREFUSED and dumps a
+// stack via unexpectedErrno on every reconnect while presence is down.
+fn connectUnixFd(path: []const u8) !c_int {
     const fd = std.c.socket(std.c.AF.UNIX, std.c.SOCK.STREAM, 0);
     if (fd < 0) return error.SocketFailed;
     errdefer _ = std.c.close(fd);
 
     var addr = std.mem.zeroes(std.c.sockaddr.un);
     addr.family = std.c.AF.UNIX;
-    if (G.opts.back_sock.len >= addr.path.len) return error.PathTooLong;
-    @memcpy(addr.path[0..G.opts.back_sock.len], G.opts.back_sock);
+    if (path.len >= addr.path.len) return error.PathTooLong;
+    @memcpy(addr.path[0..path.len], path);
 
     if (std.c.connect(fd, @ptrCast(&addr), @sizeOf(std.c.sockaddr.un)) != 0) {
         return error.ConnectFailed;
     }
     return fd;
+}
+
+fn connectBackFd() !c_int {
+    return connectUnixFd(G.opts.back_sock);
+}
+
+/// Connected Stream without going through Io.vtable.netConnectUnix (no stack dump).
+fn streamFromFd(fd: c_int) std.Io.net.Stream {
+    return .{
+        .socket = .{
+            .handle = fd,
+            // unused for unix stream ops we care about
+            .address = std.Io.net.IpAddress.parse("0.0.0.0", 0) catch unreachable,
+        },
+    };
 }
 
 fn nowSeconds() f64 {
@@ -345,9 +362,15 @@ fn handleBackLine(line: []const u8) void {
     const msg = parsed.value;
 
     if (std.mem.eql(u8, msg.ev, "caption")) {
-        // who:"ada" / "tom" / omitted → closed-caption particle (same stack).
-        // Empty who kept for backward compatibility with early ada-back.
-        if (msg.who.len == 0 or std.mem.eql(u8, msg.who, "ada") or std.mem.eql(u8, msg.who, "tom")) {
+        // who:"ada" / omitted → stack particles (sentence stream).
+        // who:"tom" → single active line: clear stack then spawn (or clear on empty)
+        // so two Tom challenges never show at once.
+        if (std.mem.eql(u8, msg.who, "tom")) {
+            G.captions.clear(G.io);
+            if (msg.text.len > 0) spawnCaption(msg.text);
+            return;
+        }
+        if (msg.who.len == 0 or std.mem.eql(u8, msg.who, "ada")) {
             spawnCaption(msg.text);
         }
         return;
@@ -422,8 +445,8 @@ fn setConnected(ok: bool) void {
 // Voice-service level streams (binary FeatureFrames)
 
 fn connectPerceptionLevels() !std.Io.net.Stream {
-    const addr = try std.Io.net.UnixAddress.init(G.opts.perception_sock);
-    var conn = try addr.connect(G.io);
+    const fd = try connectUnixFd(G.opts.perception_sock);
+    var conn = streamFromFd(fd);
     errdefer conn.close(G.io);
 
     var wbuf: [256]u8 = undefined;
@@ -439,8 +462,8 @@ fn connectPerceptionLevels() !std.Io.net.Stream {
 }
 
 fn connectPresenceLevels() !std.Io.net.Stream {
-    const addr = try std.Io.net.UnixAddress.init(G.opts.presence_sock);
-    var conn = try addr.connect(G.io);
+    const fd = try connectUnixFd(G.opts.presence_sock);
+    var conn = streamFromFd(fd);
     errdefer conn.close(G.io);
 
     var wbuf: [64]u8 = undefined;

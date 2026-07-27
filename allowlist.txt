@@ -7,8 +7,6 @@
 
 # -- sensors / trivial --------------------------------------------------------
 current_time
-# TEMPORARY M5 progress/cancel test — remove with the tool when verified
-mock_slow_tool
 
 # -- home -------------------------------------------------------------------
 desk_light
@@ -30,6 +28,7 @@ brain_graph
 brain_graphql
 brain_get_entity
 brain_put_entity
+brain_delete_entity
 brain_schema_methods
 brain_method_invoke
 

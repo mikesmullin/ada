@@ -74,7 +74,9 @@ export registerBrainTools = (agent) ->
           'frontmatter (e.g. "body:\\n  body: Mike prefers green.\\n  tags: [preference]\\n"). ' +
           'slug is Class/id (Note/favorite-color, Person/msmullin). ' +
           'Always set overwrite=true when replacing an existing fact. ' +
-          'Only say you remembered after this tool succeeds.'
+          'Writes always persist even if schema-invalid; if the tool returns valid:false ' +
+          'or a validation notice, the record is on disk — try a corrected overwrite when you can. ' +
+          'Only say you remembered after this tool reports a saved path (not a hard error).'
       else
         desc = "[long-term memory] #{desc}"
       agent.Tool name, desc,
@@ -113,6 +115,9 @@ export registerBrainTools = (agent) ->
       out = await callBrainTool 'put_entity', { slug: id, content, overwrite: true }
       if out.startsWith 'brain error'
         out
+      else if /valid:\s*false|considered INVALID/i.test(out)
+        # Soft schema issues — still persisted; surface so the agent can fix up.
+        "ok: saved #{id} — #{text}\n#{out}"
       else
         "ok: saved #{id} — #{text}"
     catch e

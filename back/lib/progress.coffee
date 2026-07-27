@@ -7,7 +7,6 @@ DEFAULT_LONG_TOOLS = [
   'control_browser'
   'run_activity_command'
   'run_application'
-  'mock_slow_tool' # temporary M5 test tool — remove when done
 ]
 
 active = null # { toolName, started, cancelPrefix, resolveCancel, timer, speak, ... }
