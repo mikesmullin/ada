@@ -28,6 +28,7 @@ import {
   startProgress, stopProgress, isWaiting as progressIsWaiting
   feedUtterance as progressFeedUtterance, isLongTool
 } from './lib/progress.coffee'
+import { announceTool } from './lib/tool-announce.coffee'
 
 # PLAN2 W3–M5: allowlist + risk + Tom + progress ticker for long tools.
 wrapToolsWithGateAndLogging = (agent) ->
@@ -72,6 +73,19 @@ wrapToolsWithGateAndLogging = (agent) ->
         else
           log "tool → #{name} [#{gate.risk}] #{argPreview}"
 
+        # Pre-tool announce (succinct status in Ada's voice, then tool runs).
+        # Enqueue so it plays without wiping in-flight speech; captions match Ada.
+        try
+          line = await announceTool
+            toolName: name
+            args: args
+            model: CFG.model
+            log: log
+          if line
+            speaker.enqueue line, currentTurn, 'enqueue'
+        catch e
+          log "announce error: #{e.message}"
+
         # Long tools: progress ticks + cancel phrase (PLAN2 M5).
         useProgress = isLongTool name, CFG.progressTools
         progress = null
@@ -101,9 +115,12 @@ wrapToolsWithGateAndLogging = (agent) ->
             if result.kind is 'cancel'
               # Detach tool promise so a late throw is not unhandled.
               toolP.catch -> null
-              log "tool ✗ #{name} cancelled by user"
-              return "cancelled by user: #{name} was aborted. " +
-                "Do not invent partial success; say the tool was cancelled."
+              # Tool-result content for the model (same path as a normal return).
+              out = "error: user aborted tool #{name}. " +
+                "The operation was cancelled mid-flight and did not complete successfully. " +
+                "Do not invent partial success; tell Mike it was cancelled."
+              log "tool ← #{name} #{out}"
+              return out
             if result.kind is 'error'
               throw result.e
             out = result.r
@@ -199,7 +216,7 @@ CFG =
   confirmTimeoutMs: Number(process.env.ADA_CONFIRM_TIMEOUT_MS or
     config.confirm?.timeout_ms or 60000)
   progressIntervalMs: Number(process.env.ADA_PROGRESS_INTERVAL_MS or
-    config.progress?.interval_ms or 8000)
+    config.progress?.interval_ms or 20000)
   progressCancelPrefix: process.env.ADA_PROGRESS_CANCEL or
     config.progress?.cancel_prefix or 'cancel that tool'
   progressTools: config.progress?.tools or []
@@ -549,6 +566,23 @@ registerTools = (agent) ->
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
         hour: 'numeric', minute: '2-digit', second: '2-digit', timeZoneName: 'short'
       "#{local} (timezone #{tz}; ISO #{now.toISOString()})"
+
+  # -- TEMPORARY M5 test tool (remove after progress/cancel verified) --------
+  agent.Tool 'mock_slow_tool',
+    'TEMPORARY test-only tool with no real side effects: waits at least 60 seconds ' +
+    'then returns ok. Call this when Mike asks to test progress updates or ' +
+    'cancel-that-tool. Do not use it for real work.',
+    label: { type: 'string', description: 'optional short label for logs/progress' }
+  , [], (ctx, { label }) ->
+    tag = String(label or 'mock wait').replace(/\s+/g, ' ').trim().slice(0, 40) or 'mock wait'
+    cancelled = false
+    ctx?.__progressSetKill?(-> cancelled = true)
+    deadline = Date.now() + 60000
+    while Date.now() < deadline
+      return "error: user aborted tool mock_slow_tool (#{tag})." if cancelled
+      await new Promise (r) -> setTimeout r, 250
+    return "error: user aborted tool mock_slow_tool (#{tag})." if cancelled
+    "ok: mock_slow_tool finished after 60 seconds (#{tag}). No real work was done."
 
   # -- app launching ---------------------------------------------------------
   # Open-ended but shell-safe (mari's `!` SHELL-mode semantics): the app
