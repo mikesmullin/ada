@@ -60,6 +60,15 @@ Durable memory lives in the **brain** knowledge graph under `ada/db/`
 - Prefer `brain_get_entity` when you know the slug; `brain_search` /
   `brain_think` for fuzzy recall.
 
+## Tasks (todo)
+
+Shared priorities live in the Markdown DSL list (default label **shared**).
+Use **`todo_next`** when Mike asks what to work on, **`todo_tree`** / crit for
+dependencies, **`todo_view`** for one item, **`todo_take`** / **`todo_release`**
+for locks, **`todo_upsert`** to create or update. Status prefixes on disk:
+`[_]` idle, `[r]` running, `[x]` done, `[-]` fail. Schedule edges use
+`dependsOn: id1, id2` only (indent is outline).
+
 ## Work secrecy
 
 Work laptop data (email, Slack, Jira, IDE, FS via unibox/rsh) is **secret**.

@@ -21,6 +21,7 @@ import { spawn } from './lib/spawn.coffee'
 import { clamp, forceInt, forceRx } from './lib/validate.coffee'
 import { initBrowserAgent, runBrowserAgent } from './ada-browser.coffee'
 import { ensureBrainMcp, registerBrainTools } from './lib/mcp-brain.coffee'
+import { ensureTodoMcp, registerTodoTools } from './lib/mcp-todo.coffee'
 
 # Log every tool call/result so "I remembered" without a disk write is diagnosable.
 wrapToolsWithLogging = (agent) ->
@@ -104,6 +105,8 @@ CFG =
   brainPath: process.env.ADA_BRAIN or process.env.BRAIN_ROOT or
     config.brain_path or "#{ADA_ROOT}/db"
   brainCwd: process.env.ADA_BRAIN_CWD or ADA_ROOT
+  taskShared: process.env.TODO_SHARED or process.env.ADA_TASK_SHARED or
+    config.task_lists?.shared or '/workspace/Biz/EM/Agent/ada-shared.task.md'
   # Gemma-4 ~120K budget; reserve room for tools + completion (PLAN2 W7).
   contextMaxTokens: Number(process.env.ADA_CONTEXT_MAX_TOKENS or
     config.context?.max_tokens or 120000)
@@ -497,6 +500,9 @@ registerTools = (agent) ->
   # -- long-term memory (brain MCP over stdio) -------------------------------
   registerBrainTools agent
 
+  # -- task lists (todo MCP over stdio; tasks.md DSL) -------------------------
+  registerTodoTools agent
+
   # After all tools registered: journal every call (name + args + result preview).
   wrapToolsWithLogging agent
 
@@ -550,6 +556,11 @@ BASE_PROMPT = '''
   Person ids are first-initial + last name lowercased (Mike Smullin is
   Person/msmullin). If earlier conversation was trimmed for length, you
   will see a notice — recover by using brain tools or asking Mike.
+  Priorities and multi-step work live in the shared task list tools
+  (todo_next, todo_tree, todo_view, todo_take, todo_release, todo_upsert).
+  When Mike asks what to do next or about the task list, call todo_next
+  (or todo_tree) — do not invent tasks. Say you updated a task only after
+  a successful todo_* write.
   Do not pull work-laptop secrets into chat. If the user is just talking,
   just talk back — do not use tools.
   '''
@@ -775,9 +786,12 @@ main = ->
     root: CFG.brainPath
   log if brainOk then "brain mcp ready (#{CFG.brainPath})" else 'brain mcp unavailable'
 
+  todoOk = await ensureTodoMcp shared: CFG.taskShared
+  log if todoOk then "todo mcp ready (#{CFG.taskShared})" else 'todo mcp unavailable'
+
   startAvatarServer()
   connectWords()
-  log "ada-back ready (voice=#{CFG.voice} model=#{CFG.model} wake=#{CFG.wake} brain=#{if brainOk then 'on' else 'off'})"
+  log "ada-back ready (voice=#{CFG.voice} model=#{CFG.model} wake=#{CFG.wake} brain=#{if brainOk then 'on' else 'off'} todo=#{if todoOk then 'on' else 'off'})"
 
   # ADA_SELFTEST="<text>": run one synthetic utterance through the full
   # turn pipeline (gate → agent → splitter → speaker → latency report)
