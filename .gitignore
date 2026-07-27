@@ -6,3 +6,15 @@ node_modules/
 !back/bun.lock
 src/shaders/*.glsl.zig
 zig-pkg/
+/tmp/
+
+# Private long-term memory (nested git inside db/; never push with ada.git)
+/db/
+# Brain project config sibling of db/ (may hold local embed prefs)
+/brain.yaml
+# Secrets (mintty/auth later)
+.env
+# Structured agent logs (diary map-reduce input; local only)
+/logs/
+# Instance lock / sockets
+.back.lock

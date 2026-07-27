@@ -20,6 +20,7 @@ import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from
 import { spawn } from './lib/spawn.coffee'
 import { clamp, forceInt, forceRx } from './lib/validate.coffee'
 import { initBrowserAgent, runBrowserAgent } from './ada-browser.coffee'
+import { ensureBrainMcp, registerBrainTools } from './lib/mcp-brain.coffee'
 
 # ---------------------------------------------------------------------------
 # Single-instance lock: a second back would steal the avatar socket and
@@ -61,6 +62,8 @@ loadConfig = ->
 
 config = loadConfig() or {}
 
+ADA_ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '')
+
 CFG =
   backSock: process.env.ADA_BACK_SOCK or
     "#{process.env.XDG_RUNTIME_DIR or '/tmp'}/ada-back.sock"
@@ -73,7 +76,16 @@ CFG =
   convWindowMs: Number(process.env.ADA_CONV_WINDOW_MS or 8000)
   activityDir: process.env.ADA_ACTIVITY_DIR or '/workspace/mari/activity'
   sfxDir: new URL('../sfx/', import.meta.url).pathname
-  historyMax: 24
+  # Soft cap on recent turns kept for prompt context (token compaction may drop more).
+  historyMax: Number(process.env.ADA_HISTORY_MAX or config.history_max or 48)
+  brainPath: process.env.ADA_BRAIN or process.env.BRAIN_ROOT or
+    config.brain_path or "#{ADA_ROOT}/db"
+  brainCwd: process.env.ADA_BRAIN_CWD or ADA_ROOT
+  # Gemma-4 ~120K budget; reserve room for tools + completion (PLAN2 W7).
+  contextMaxTokens: Number(process.env.ADA_CONTEXT_MAX_TOKENS or
+    config.context?.max_tokens or 120000)
+  contextReserveTokens: Number(process.env.ADA_CONTEXT_RESERVE_TOKENS or
+    config.context?.compact_reserve_tokens or 8000)
 
 log = (a...) -> console.log "[#{new Date().toISOString().slice 11, 23}]", a...
 
@@ -459,6 +471,9 @@ registerTools = (agent) ->
   , ['task'], (ctx, { task }) ->
     await runBrowserAgent task
 
+  # -- long-term memory (brain MCP over stdio) -------------------------------
+  registerBrainTools agent
+
 # ---------------------------------------------------------------------------
 # Turn engine
 
@@ -476,12 +491,16 @@ loadSoul = ->
     ''
 
 BASE_PROMPT = '''
-  You are Ada, a spoken-voice desktop assistant. Your replies are read
-  aloud by a text-to-speech engine, so: be conversational and concise
-  (usually one or two short sentences), never use markdown, bullet
+  You are Ada, a spoken-voice companion and coach on Mike's home PC.
+  Your replies are read aloud by text-to-speech, so: be conversational and
+  concise (usually one or two short sentences), never use markdown, bullet
   points, emoji, or headings, and spell things the way they should be
   spoken. You hear the user through an always-on microphone; transcripts
   may contain small transcription errors — infer the intent.
+  Be genuinely helpful, not performatively helpful. Skip filler like
+  "great question" or "I'd be happy to help" — just help. Prefer tools
+  over empty promises: if you say you will remember or look something up,
+  call the tool in this turn.
   You can control the home with tools. There are two independently
   controllable lights: the desk lamp (desk_light) and the PC tower LED
   strip (pc_light_color). When the user says "lights" (plural) or does
@@ -494,7 +513,14 @@ BASE_PROMPT = '''
   whole task to control_browser in one call (it can see and drive my
   actual browser: navigate, read pages, click, fill forms) rather than
   trying to guess at browser tools yourself.
-  If the user is just talking, just talk back — do not use tools.
+  Long-term memory lives in the brain graph tools (brain_put_entity,
+  brain_get_entity, brain_search, brain_think, brain_ontology, and related).
+  Prefer brain_put_entity for durable facts (people, notes, preferences).
+  Person ids are first-initial + last name lowercased (Mike Smullin is
+  Person/msmullin). If earlier conversation was trimmed for length, you
+  will see a notice — recover by using brain tools or asking Mike.
+  Do not pull work-laptop secrets into chat. If the user is just talking,
+  just talk back — do not use tools.
   '''
 
 SYSTEM_PROMPT = BASE_PROMPT + loadSoul()
@@ -502,11 +528,41 @@ SYSTEM_PROMPT = BASE_PROMPT + loadSoul()
 history = []
 currentTurn = null
 turnCounter = 0
+# Set when front-trim drops older turns so the model knows history is incomplete.
+compactionNotice = null
+
+# Rough token estimate (chars/4) until a real tokenizer is wired.
+estimateTokens = (s) -> Math.ceil(String(s or '').length / 4)
+
+# PLAN2 W7: front-trim oldest history turns until system+history+user fit budget.
+compactHistoryForPrompt = (userText) ->
+  reserve = CFG.contextReserveTokens
+  budget = Math.max(1000, CFG.contextMaxTokens - reserve)
+  systemTok = estimateTokens SYSTEM_PROMPT
+  userTok = estimateTokens userText
+  # Keep a working copy of the soft-capped recent window, then drop from the front.
+  recent = history.slice -CFG.historyMax
+  notice = ''
+  dropped = 0
+  loop
+    ctx = recent.map((h) -> "#{h.who}: #{h.text}").join '\n'
+    noticeBlock = if notice then "#{notice}\n\n" else ''
+    total = systemTok + estimateTokens(noticeBlock + ctx) + userTok + 64
+    break if total <= budget or recent.length is 0
+    recent.shift()
+    dropped++
+    notice = 'Context notice: earlier turns in this long day were dropped to fit the model window. Durable facts should be in brain memory — use brain_search or brain_get_entity, or ask Mike.'
+  compactionNotice = if dropped > 0 then notice else null
+  { recent, notice: compactionNotice, dropped }
 
 renderPrompt = (text) ->
-  recent = history.slice -CFG.historyMax
+  { recent, notice } = compactHistoryForPrompt text
+  parts = []
+  parts.push notice if notice
   ctx = recent.map((h) -> "#{h.who}: #{h.text}").join '\n'
-  (if ctx then "(recent conversation for context:\n#{ctx})\n\n" else '') + text
+  parts.push "(recent conversation for context:\n#{ctx})" if ctx
+  prefix = if parts.length then parts.join('\n\n') + '\n\n' else ''
+  prefix + text
 
 runTurn = (utt, gate) ->
   # barge-in: a new passing utterance cancels whatever is pending/speaking —
@@ -565,7 +621,10 @@ runTurn = (utt, gate) ->
   unless turn.cancelled
     history.push { who: 'user', text: utt.text }
     history.push { who: 'ada', text: turn.reply.trim() } if turn.reply.trim()
-    history.shift() while history.length > CFG.historyMax * 2
+    # Keep a generous in-memory ring; token compaction applies at prompt time.
+    history.shift() while history.length > Math.max(CFG.historyMax * 4, 64)
+    if compactionNotice
+      log "turn #{turn.id}: context compacted (front-trim active)"
 
   if currentTurn is turn
     currentTurn = null
@@ -679,9 +738,15 @@ main = ->
   # optional: the browser sub-agent, only if mcp-zen is running
   await initBrowserAgent()
 
+  # long-term memory: brain MCP (stdio). Failure is non-fatal — home tools still work.
+  brainOk = await ensureBrainMcp
+    cwd: CFG.brainCwd
+    root: CFG.brainPath
+  log if brainOk then "brain mcp ready (#{CFG.brainPath})" else 'brain mcp unavailable'
+
   startAvatarServer()
   connectWords()
-  log "ada-back ready (voice=#{CFG.voice} model=#{CFG.model} wake=#{CFG.wake})"
+  log "ada-back ready (voice=#{CFG.voice} model=#{CFG.model} wake=#{CFG.wake} brain=#{if brainOk then 'on' else 'off'})"
 
   # ADA_SELFTEST="<text>": run one synthetic utterance through the full
   # turn pipeline (gate → agent → splitter → speaker → latency report)

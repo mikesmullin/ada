@@ -6,3 +6,39 @@
 # Voice preset name, as defined in /workspace/voice/config.yaml's `voices:`
 # map (e.g. ada, nicole, bella, norman, lessac, ...).
 voice: nova
+
+# Private brain graph (gitignored; nested git inside). Absolute path to db/.
+brain_path: /workspace/ada/db
+
+# Soft cap on recent conversation turns kept for prompt context.
+# Token-aware compaction may drop more under context.max_tokens.
+history_max: 48
+
+# Gemma-4 ~120K context window (PLAN2 W7).
+context:
+  max_tokens: 120000
+  compact_reserve_tokens: 8000
+
+# Shared task list (M2 — path locked; todo MCP later).
+task_lists:
+  shared: /workspace/Biz/EM/Agent/ada-shared.task.md
+
+# Tom / confirm (M4 — config shape locked; enforcement later).
+confirm:
+  approve: random_3_word_phrase
+  deny_phrases:
+    - "belay that order"
+  timeout_ms: 60000
+
+# Progress narrator (M5).
+progress:
+  interval_ms: 8000
+  cancel_prefix: "cancel that tool"
+
+# Background planner (M6).
+planner:
+  volunteer_interval_ms: 3600000
+
+# Diary interval (M7; also scheduled via crony).
+diary:
+  interval: 4h
