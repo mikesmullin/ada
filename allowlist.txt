@@ -7,6 +7,8 @@
 
 # -- sensors / trivial --------------------------------------------------------
 current_time
+# TEMPORARY M5 progress/cancel test — remove with the tool when verified
+mock_slow_tool
 
 # -- home -------------------------------------------------------------------
 desk_light

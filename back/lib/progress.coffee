@@ -7,6 +7,7 @@ DEFAULT_LONG_TOOLS = [
   'control_browser'
   'run_activity_command'
   'run_application'
+  'mock_slow_tool' # temporary M5 test tool — remove when done
 ]
 
 active = null # { toolName, started, cancelPrefix, resolveCancel, timer, speak, ... }
@@ -73,7 +74,7 @@ export startProgress = ({
 
   started = Date.now()
   cancelPrefix = cancelPrefix or 'cancel that tool'
-  intervalMs = Math.max(3000, intervalMs or 8000)
+  intervalMs = Math.max(5000, intervalMs or 20000)
 
   resolveCancel = null
   cancelPromise = new Promise (r) -> resolveCancel = r
@@ -111,10 +112,9 @@ export startProgress = ({
     return unless active is job
     job.tick += 1
     elapsed = Math.round (Date.now() - started) / 1000
-    nextIn = Math.round intervalMs / 1000
     label = humanTool toolName, args
     msg = "Still working on #{label}. About #{elapsed} seconds so far. " +
-      "Next update in #{nextIn} seconds. Say #{cancelPrefix} to stop."
+      "Say #{cancelPrefix} to stop."
     log? "progress tick #{job.tick} #{toolName} #{elapsed}s"
     # Don't await inside interval — overlap protection
     unless job.speaking

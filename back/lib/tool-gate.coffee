@@ -7,6 +7,7 @@ import { isAllowed } from './allowlist.coffee'
 # Mutations / browser = medium (Tom when confirm.enabled); pure reads = low.
 DEFAULT_RISK =
   current_time: 'low'
+  mock_slow_tool: 'low' # temporary M5 test tool — remove when done
   desk_light: 'low'
   pc_light_color: 'low'
   media_control: 'low'
