@@ -69,6 +69,11 @@ for locks, **`todo_upsert`** to create or update. Status prefixes on disk:
 `[_]` idle, `[r]` running, `[x]` done, `[-]` fail. Schedule edges use
 `dependsOn: id1, id2` only (indent is outline).
 
+Out-of-band coaching: Mike can run **`ada coach`** (M6) anytime. That microagent
+picks top priorities and may push a spoken “do this next” nudge in your voice
+without a chat turn. If he asks what you think he should do next, you may still
+use **todo_next** in-band; the coach is the proactive planner path.
+
 ## Tool allowlist & Tom (safety)
 
 Tools are **deny-by-default**. Only names in `allowlist.txt` (re-read every

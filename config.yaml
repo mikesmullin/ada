@@ -54,9 +54,11 @@ progress:
   # Extra tool names beyond the built-in long list (browser, activity, app).
   # tools: []
 
-# Background planner (M6).
+# Coach / planner (M6) — `ada coach` microagent; later volunteer interval (M6b).
 planner:
   volunteer_interval_ms: 3600000
+  timeout_ms: 90000
+  # list: shared   # optional override; default task_lists.shared
 
 # Diary interval (M7; also scheduled via crony → ada diary).
 # Input corpus = logs/ada.archive.yaml (period) ∪ logs/ada.yaml (live window).
