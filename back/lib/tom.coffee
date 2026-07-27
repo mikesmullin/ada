@@ -1,6 +1,6 @@
 # Tom the Security Guy — confirmation microagent boundary (PLAN2 M4).
 # One decision: approve or deny a gated tool call via spoken 3-word phrase.
-# Voice: presence-voice preset `norman`. STT: next utterance(s) from perception.
+# Voice: presence-voice preset `michael` (Kokoro am_michael). STT: next utterances.
 # Stays in the confirm loop until approve / deny / silence timeout (not Ada).
 import { randomApprovePhrase, matchesApprovePhrase, matchesDenyPhrase, normalizeSpeech } from './petname.coffee'
 
@@ -78,7 +78,7 @@ export tomConfirm = ({
       broadcast? { ev: 'caption', who: 'tom', text: challenge }
     catch e then null
     try
-      await speakOnce voiceTom or 'norman', challenge, schedule
+      await speakOnce voiceTom or 'michael', challenge, schedule
     catch e
       log? "tom speak failed: #{e.message}"
       throw e

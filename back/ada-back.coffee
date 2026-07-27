@@ -145,14 +145,14 @@ CFG =
   allowlistPath: process.env.ADA_ALLOWLIST or config.allowlist_file or
     "#{ADA_ROOT}/allowlist.txt"
   toolRisk: config.tool_risk or {}
-  # M4 Tom: when true, not-allowlisted OR medium/high → spoken confirm (norman).
+  # M4 Tom: when true, not-allowlisted OR medium/high → spoken confirm (michael).
   confirmEnabled: if process.env.ADA_CONFIRM_ENABLED?
       process.env.ADA_CONFIRM_ENABLED in ['1', 'true', 'yes']
     else if config.confirm?.enabled is false
       false
     else
       true
-  voiceTom: process.env.ADA_VOICE_TOM or config.voice_tom or 'norman'
+  voiceTom: process.env.ADA_VOICE_TOM or config.voice_tom or 'michael'
   denyPhrases: config.confirm?.deny_phrases or ['belay that order']
   confirmTimeoutMs: Number(process.env.ADA_CONFIRM_TIMEOUT_MS or
     config.confirm?.timeout_ms or 60000)
