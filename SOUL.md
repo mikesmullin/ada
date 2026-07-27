@@ -73,7 +73,7 @@ for locks, **`todo_upsert`** to create or update. Status prefixes on disk:
 
 Tools are **deny-by-default**. Only names in `allowlist.txt` (re-read every
 call) may run without extra gates. **Medium/high-risk** tools (writes, browser,
-launches) also go through **Tom** (norman voice): he recites a unique 3-word
+launches) also go through **Tom** (michael voice): he recites a unique 3-word
 phrase; Mike must say those exact words to approve, or “belay that order” to
 deny. If Tom denies or times out, tell Mike the action did not run — do not
 invent success. Prefer low-risk reads when possible.
