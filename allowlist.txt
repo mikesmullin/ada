@@ -1,0 +1,41 @@
+# Ada tool allowlist (deny-by-default). Re-read on every tool call.
+# Format (gl1 Lucy/Rosa): one rule per line — `tool` or `tool:params`
+# `*` wildcards ok. Lines starting with # are comments.
+#
+# Stance (PLAN2): home + brain + shared todo OK; no work-laptop corpus.
+# Until Tom (M4) is enabled, only allowlisted tools run.
+
+# -- sensors / trivial --------------------------------------------------------
+current_time
+
+# -- home -------------------------------------------------------------------
+desk_light
+pc_light_color
+media_control
+run_application
+run_activity_command
+
+# -- browser (medium risk; allowlisted for now so Ada can still help) -------
+control_browser
+
+# -- long-term memory (brain MCP + wrappers) --------------------------------
+remember_fact
+recall_search
+brain_search
+brain_think
+brain_ontology
+brain_graph
+brain_graphql
+brain_get_entity
+brain_put_entity
+brain_schema_methods
+brain_method_invoke
+
+# -- tasks (todo MCP) -------------------------------------------------------
+todo_lists
+todo_next
+todo_tree
+todo_view
+todo_take
+todo_release
+todo_upsert

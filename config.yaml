@@ -23,8 +23,18 @@ context:
 task_lists:
   shared: /workspace/Biz/EM/Agent/ada-shared.task.md
 
-# Tom / confirm (M4 — config shape locked; enforcement later).
+# Deny-by-default tool allowlist (PLAN2 M3). Re-read on every tool call.
+allowlist_file: /workspace/ada/allowlist.txt
+
+# Optional per-tool risk overrides (low | medium | high). Defaults live in
+# back/lib/tool-gate.coffee. low+allowlisted runs; medium/high need Tom when
+# confirm.enabled is true (M4).
+# tool_risk:
+#   control_browser: high
+
+# Tom / confirm (M4). enabled: false until Tom microagent is wired.
 confirm:
+  enabled: false
   approve: random_3_word_phrase
   deny_phrases:
     - "belay that order"

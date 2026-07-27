@@ -22,18 +22,28 @@ import { clamp, forceInt, forceRx } from './lib/validate.coffee'
 import { initBrowserAgent, runBrowserAgent } from './ada-browser.coffee'
 import { ensureBrainMcp, registerBrainTools } from './lib/mcp-brain.coffee'
 import { ensureTodoMcp, registerTodoTools } from './lib/mcp-todo.coffee'
+import { checkToolGate } from './lib/tool-gate.coffee'
 
-# Log every tool call/result so "I remembered" without a disk write is diagnosable.
-wrapToolsWithLogging = (agent) ->
+# PLAN2 W3: deny-by-default allowlist (re-read every call) + risk tiers.
+# Logging wraps outside the gate so blocked calls still appear in the journal.
+wrapToolsWithGateAndLogging = (agent) ->
   for name in Object.keys agent.tools
     do (name) ->
       fn = agent.tools[name]
       wrapped = (ctx, args) ->
         argPreview = try JSON.stringify(args ? {}).slice(0, 240) catch e then String(args)
-        log "tool → #{name} #{argPreview}"
+        gate = checkToolGate
+          toolName: name
+          args: args
+          allowlistPath: CFG.allowlistPath
+          configRisk: CFG.toolRisk
+          confirmEnabled: CFG.confirmEnabled
+        unless gate.ok
+          log "tool ✗ #{name} blocked risk=#{gate.risk} #{argPreview}"
+          return gate.message
+        log "tool → #{name} [#{gate.risk}] #{argPreview}"
         try
           result = await fn ctx, args
-          # preserve agl-ai metadata on the original fn
           preview = String(result ? '').replace(/\s+/g, ' ').slice(0, 240)
           log "tool ← #{name} #{preview}"
           result
@@ -107,6 +117,14 @@ CFG =
   brainCwd: process.env.ADA_BRAIN_CWD or ADA_ROOT
   taskShared: process.env.TODO_SHARED or process.env.ADA_TASK_SHARED or
     config.task_lists?.shared or '/workspace/Biz/EM/Agent/ada-shared.task.md'
+  allowlistPath: process.env.ADA_ALLOWLIST or config.allowlist_file or
+    "#{ADA_ROOT}/allowlist.txt"
+  toolRisk: config.tool_risk or {}
+  # M4 Tom: when true, allowlisted medium/high tools still require Tom.
+  confirmEnabled: if process.env.ADA_CONFIRM_ENABLED?
+      process.env.ADA_CONFIRM_ENABLED in ['1', 'true', 'yes']
+    else
+      config.confirm?.enabled is true
   # Gemma-4 ~120K budget; reserve room for tools + completion (PLAN2 W7).
   contextMaxTokens: Number(process.env.ADA_CONTEXT_MAX_TOKENS or
     config.context?.max_tokens or 120000)
@@ -503,8 +521,8 @@ registerTools = (agent) ->
   # -- task lists (todo MCP over stdio; tasks.md DSL) -------------------------
   registerTodoTools agent
 
-  # After all tools registered: journal every call (name + args + result preview).
-  wrapToolsWithLogging agent
+  # After all tools registered: allowlist+risk gate, then journal calls.
+  wrapToolsWithGateAndLogging agent
 
 # ---------------------------------------------------------------------------
 # Turn engine

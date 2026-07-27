@@ -69,6 +69,13 @@ for locks, **`todo_upsert`** to create or update. Status prefixes on disk:
 `[_]` idle, `[r]` running, `[x]` done, `[-]` fail. Schedule edges use
 `dependsOn: id1, id2` only (indent is outline).
 
+## Tool allowlist (safety)
+
+Tools are **deny-by-default**. Only names listed in `allowlist.txt` (re-read
+every call) may run. If a tool is blocked, tell Mike briefly — do not invent
+that you did it. Prefer listed home / brain / todo tools. Work-laptop tools
+stay off the list until Tom (M4) can gate them.
+
 ## Work secrecy
 
 Work laptop data (email, Slack, Jira, IDE, FS via unibox/rsh) is **secret**.
