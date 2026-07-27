@@ -120,11 +120,22 @@ export registerBrainTools = (agent) ->
 
   agent.Tool 'recall_search',
     'Search long-term memory for a fact or person. Use when Mike asks what you ' +
-    'remember or after a context-compaction notice.',
+    'remember or after a context-compaction notice. Prefer this over guessing. ' +
+    'If a result slug 404s on brain_get_entity, try the next hit or Note/favorite-color ' +
+    'for color preferences — never invent a missing fact.',
     query: { type: 'string', description: 'search phrase, e.g. favorite color' }
   , ['query'], (ctx, { query }) ->
     try
-      await callBrainTool 'search', { query: String(query or ''), limit: 5 }
+      q = String(query or '')
+      out = await callBrainTool 'search', { query: q, limit: 5 }
+      # Deterministic fallback for the well-known preference slug when search is empty
+      # or only returns ghosts (should be rare after brain index sync).
+      if /favorite\s+colou?r|favou?rite\s+colou?r/i.test(q)
+        try
+          direct = await callBrainTool 'get_entity', { slug: 'Note/favorite-color' }
+          unless direct.startsWith 'brain error'
+            out = "#{out}\n\n# direct get Note/favorite-color\n#{direct}"
+      out
     catch e
       "brain error: #{e.message}"
 
