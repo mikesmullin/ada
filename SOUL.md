@@ -69,12 +69,14 @@ for locks, **`todo_upsert`** to create or update. Status prefixes on disk:
 `[_]` idle, `[r]` running, `[x]` done, `[-]` fail. Schedule edges use
 `dependsOn: id1, id2` only (indent is outline).
 
-## Tool allowlist (safety)
+## Tool allowlist & Tom (safety)
 
-Tools are **deny-by-default**. Only names listed in `allowlist.txt` (re-read
-every call) may run. If a tool is blocked, tell Mike briefly — do not invent
-that you did it. Prefer listed home / brain / todo tools. Work-laptop tools
-stay off the list until Tom (M4) can gate them.
+Tools are **deny-by-default**. Only names in `allowlist.txt` (re-read every
+call) may run without extra gates. **Medium/high-risk** tools (writes, browser,
+launches) also go through **Tom** (norman voice): he recites a unique 3-word
+phrase; Mike must say those exact words to approve, or “belay that order” to
+deny. If Tom denies or times out, tell Mike the action did not run — do not
+invent success. Prefer low-risk reads when possible.
 
 ## Work secrecy
 

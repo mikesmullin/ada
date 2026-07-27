@@ -23,9 +23,9 @@ import { initBrowserAgent, runBrowserAgent } from './ada-browser.coffee'
 import { ensureBrainMcp, registerBrainTools } from './lib/mcp-brain.coffee'
 import { ensureTodoMcp, registerTodoTools } from './lib/mcp-todo.coffee'
 import { checkToolGate } from './lib/tool-gate.coffee'
+import { tomConfirm, feedUtterance as tomFeedUtterance, isWaiting as tomIsWaiting } from './lib/tom.coffee'
 
-# PLAN2 W3: deny-by-default allowlist (re-read every call) + risk tiers.
-# Logging wraps outside the gate so blocked calls still appear in the journal.
+# PLAN2 W3/M4: allowlist (re-read every call) + risk + Tom spoken confirm.
 wrapToolsWithGateAndLogging = (agent) ->
   for name in Object.keys agent.tools
     do (name) ->
@@ -39,9 +39,27 @@ wrapToolsWithGateAndLogging = (agent) ->
           configRisk: CFG.toolRisk
           confirmEnabled: CFG.confirmEnabled
         unless gate.ok
-          log "tool ✗ #{name} blocked risk=#{gate.risk} #{argPreview}"
-          return gate.message
-        log "tool → #{name} [#{gate.risk}] #{argPreview}"
+          if gate.needsTom and CFG.confirmEnabled
+            log "tool ? #{name} [#{gate.risk}] needs Tom #{argPreview}"
+            setState active: true
+            tom = await tomConfirm
+              toolName: name
+              args: args
+              risk: gate.risk
+              speakOnce: speakOnce
+              voiceTom: CFG.voiceTom
+              denyPhrases: CFG.denyPhrases
+              timeoutMs: CFG.confirmTimeoutMs
+              log: log
+            unless tom.approved
+              log "tool ✗ #{name} Tom #{tom.reason}"
+              return gate.message + " (#{tom.reason})"
+            log "tool → #{name} [#{gate.risk}] Tom approved #{argPreview}"
+          else
+            log "tool ✗ #{name} blocked risk=#{gate.risk} #{argPreview}"
+            return gate.message
+        else
+          log "tool → #{name} [#{gate.risk}] #{argPreview}"
         try
           result = await fn ctx, args
           preview = String(result ? '').replace(/\s+/g, ' ').slice(0, 240)
@@ -120,11 +138,17 @@ CFG =
   allowlistPath: process.env.ADA_ALLOWLIST or config.allowlist_file or
     "#{ADA_ROOT}/allowlist.txt"
   toolRisk: config.tool_risk or {}
-  # M4 Tom: when true, allowlisted medium/high tools still require Tom.
+  # M4 Tom: when true, not-allowlisted OR medium/high → spoken confirm (norman).
   confirmEnabled: if process.env.ADA_CONFIRM_ENABLED?
       process.env.ADA_CONFIRM_ENABLED in ['1', 'true', 'yes']
+    else if config.confirm?.enabled is false
+      false
     else
-      config.confirm?.enabled is true
+      true
+  voiceTom: process.env.ADA_VOICE_TOM or config.voice_tom or 'norman'
+  denyPhrases: config.confirm?.deny_phrases or ['belay that order']
+  confirmTimeoutMs: Number(process.env.ADA_CONFIRM_TIMEOUT_MS or
+    config.confirm?.timeout_ms or 60000)
   # Gemma-4 ~120K budget; reserve room for tools + completion (PLAN2 W7).
   contextMaxTokens: Number(process.env.ADA_CONTEXT_MAX_TOKENS or
     config.context?.max_tokens or 120000)
@@ -724,10 +748,17 @@ onWordsEvent = (msg) ->
   if msg.ev is 'partial'
     # pre-activation feedback: light the orb up as soon as the wake word (or
     # a held PTT) is heard, before the utterance even finalizes
-    if not state.active and (pttDown or CFG.wake.test(msg.text or ''))
+    if not state.active and (pttDown or CFG.wake.test(msg.text or '') or tomIsWaiting())
       setState active: true
     return
   if msg.ev is 'utterance'
+    # Tom confirmation captures the next utterance(s) without starting a turn.
+    if tomIsWaiting()
+      log "tom heard: #{msg.text}"
+      tomFeedUtterance msg.text or ''
+      convWindowUntil = Date.now() + CFG.convWindowMs
+      setState active: true
+      return
     gate = activationGate msg
     unless gate
       log "(unaddressed) #{msg.text}"
@@ -809,7 +840,8 @@ main = ->
 
   startAvatarServer()
   connectWords()
-  log "ada-back ready (voice=#{CFG.voice} model=#{CFG.model} wake=#{CFG.wake} brain=#{if brainOk then 'on' else 'off'} todo=#{if todoOk then 'on' else 'off'})"
+  log "ada-back ready (voice=#{CFG.voice} tom=#{CFG.voiceTom} confirm=#{CFG.confirmEnabled} " +
+    "model=#{CFG.model} wake=#{CFG.wake} brain=#{if brainOk then 'on' else 'off'} todo=#{if todoOk then 'on' else 'off'})"
 
   # ADA_SELFTEST="<text>": run one synthetic utterance through the full
   # turn pipeline (gate → agent → splitter → speaker → latency report)

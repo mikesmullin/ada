@@ -6,6 +6,8 @@
 # Voice preset name, as defined in /workspace/voice/config.yaml's `voices:`
 # map (e.g. ada, nicole, bella, norman, lessac, ...).
 voice: nova
+# Tom the Security Guy (M4) — Piper norman for confirmation challenges.
+voice_tom: norman
 
 # Private brain graph (gitignored; nested git inside). Absolute path to db/.
 brain_path: /workspace/ada/db
@@ -32,9 +34,10 @@ allowlist_file: /workspace/ada/allowlist.txt
 # tool_risk:
 #   control_browser: high
 
-# Tom / confirm (M4). enabled: false until Tom microagent is wired.
+# Tom / confirm (M4). When enabled, medium/high (and non-allowlisted) tools
+# require a spoken 3-word phrase (norman). Deny with belay that order.
 confirm:
-  enabled: false
+  enabled: true
   approve: random_3_word_phrase
   deny_phrases:
     - "belay that order"

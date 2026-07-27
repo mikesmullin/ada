@@ -61,22 +61,30 @@ export checkToolGate = ({ toolName, args, allowlistPath, configRisk, confirmEnab
   allowed = isAllowed text, toolName, params
   risk = riskOf toolName, configRisk
 
-  unless allowed
+  # PLAN2: not allowlisted → Tom when enabled, else hard deny.
+  # allowlisted low → run. allowlisted medium/high → Tom when enabled.
+  if not allowed
+    if confirmEnabled
+      return {
+        ok: false
+        needsTom: true
+        risk
+        message: "blocked: tool #{toolName} was denied (not allowlisted; Tom denied or timed out)."
+      }
     return {
       ok: false
+      needsTom: false
       risk
       message: "blocked: tool #{toolName} is not on the allowlist " +
-        "(deny-by-default; risk=#{risk}). Add a line to the allowlist file " +
-        "or use Tom confirmation when enabled (M4)."
+        "(deny-by-default; risk=#{risk})."
     }
 
-  # Allowlisted: still gate medium/high when Tom confirm is enabled.
   if confirmEnabled and risk in ['medium', 'high']
     return {
       ok: false
+      needsTom: true
       risk
-      message: "blocked: tool #{toolName} requires Tom confirmation " +
-        "(risk=#{risk}; allowlisted but confirm.enabled). Tom is M4."
+      message: "blocked: tool #{toolName} was denied by Tom (risk=#{risk})."
     }
 
-  { ok: true, risk }
+  { ok: true, risk, needsTom: false }
