@@ -7,9 +7,10 @@
 //! FeatureFrames, tts). Threads only write the `targets` struct; the
 //! render thread smooths toward it with attack/release envelopes.
 //!
-//! Fail-fast: without --solo, all three services must be reachable at
-//! startup (plan §9.3); after that, each socket thread reconnects with a
-//! 1 s backoff so a service restart just makes the orb go quiet briefly.
+//! Without --solo, socket threads start even if services are down: the orb
+//! shows disconnected (red) and each thread reconnects with a 1 s backoff
+//! until ada-back / perception / presence come up (e.g. after
+//! `systemctl restart` races with avatar launch).
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -52,7 +53,8 @@ const Targets = struct {
     active: f32 = 0,
     thinking: f32 = 0,
     speaking: f32 = 0,
-    connected: f32 = 1,
+    /// 0 until ada-back is connected (orb draws red / disconnected).
+    connected: f32 = 0,
     user: AudioFeat = .{},
     ada: AudioFeat = .{},
     /// nowSeconds() of the last TTS frame with audible content. The back's
@@ -69,7 +71,7 @@ const Smooth = struct {
     active: f32 = 0,
     thinking: f32 = 0,
     speaking: f32 = 0,
-    connected: f32 = 1,
+    connected: f32 = 0,
     user: AudioFeat = .{},
     ada: AudioFeat = .{},
     user_env: f32 = 0,
@@ -767,6 +769,7 @@ export fn cleanup() void {
 // ---------------------------------------------------------------------------
 
 pub fn run(io: std.Io, alloc: std.mem.Allocator, opts: Options, log: *std.Io.Writer) !void {
+    _ = log; // startup diagnostics use stderr; keep param for call-site compatibility
     G.alloc = alloc;
     G.io = io;
     G.opts = opts;
@@ -776,43 +779,46 @@ pub fn run(io: std.Io, alloc: std.mem.Allocator, opts: Options, log: *std.Io.Wri
     installLockSignalHandlers();
 
     if (!opts.solo) {
-        // fail fast, with an actionable message per missing service (§9.3)
-        G.back_fd = connectBackFd() catch {
+        // Soft-start: open the window even if services are mid-restart.
+        // backThread / levelsThread already reconnect every ~1s; the orb
+        // stays red (connected=0) until ada-back accepts the socket.
+        G.back_fd = connectBackFd() catch blk: {
             emitStartupError(
                 io,
-                "error: ada back is not reachable (unix://{s})\n" ++
-                    "       start it: systemctl --user start ada-back\n" ++
-                    "       (or run the orb alone: ada avatar --solo)\n",
+                "warning: ada-back not reachable yet (unix://{s})\n" ++
+                    "         orb will stay disconnected until it comes up\n",
                 .{opts.back_sock},
             );
-            std.process.exit(1);
+            break :blk -1;
         };
-        const perc = connectPerceptionLevels() catch {
+        if (G.back_fd >= 0) setConnected(true);
+
+        const perc: ?std.Io.net.Stream = connectPerceptionLevels() catch blk: {
             emitStartupError(
                 io,
-                "error: perception-voice levels stream is not reachable (unix://{s})\n" ++
-                    "       start it: systemctl --user start perception-voice\n",
+                "warning: perception-voice levels not reachable yet (unix://{s})\n" ++
+                    "         will keep retrying\n",
                 .{opts.perception_sock},
             );
-            std.process.exit(1);
+            break :blk null;
         };
-        // Presence levels are OPTIONAL for now: the `subscribe levels`
-        // interface is milestone 5 (presence-voice side, Bob's). Until it
-        // lands, the orb synthesizes a speaking pulse from state events; the
-        // thread keeps retrying and picks the real stream up automatically.
+        // Presence levels optional: synthesize speaking pulse until available.
         const pres: ?std.Io.net.Stream = connectPresenceLevels() catch blk: {
-            try log.print(
-                "warning: presence-voice levels stream unavailable (unix://{s})\n" ++
-                    "         speaking pulse will be synthesized until `subscribe levels` lands\n",
+            emitStartupError(
+                io,
+                "warning: presence-voice levels unavailable (unix://{s})\n" ++
+                    "         speaking pulse will be synthesized until levels connect\n",
                 .{opts.presence_sock},
             );
-            try log.flush();
             break :blk null;
         };
 
         _ = try std.Thread.spawn(.{}, backThread, .{});
-        _ = try std.Thread.spawn(.{}, perceptionThread, .{@as(?std.Io.net.Stream, perc)});
+        _ = try std.Thread.spawn(.{}, perceptionThread, .{perc});
         _ = try std.Thread.spawn(.{}, presenceThread, .{pres});
+    } else {
+        // --solo has no services; treat as "connected" for normal coloring.
+        setConnected(true);
     }
 
     sapp.run(.{
