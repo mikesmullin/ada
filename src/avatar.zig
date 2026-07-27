@@ -143,13 +143,24 @@ fn readLockMeta(io: std.Io, file: std.Io.File) struct { pid: std.posix.pid_t, st
     return .{ .pid = pid, .started = started };
 }
 
-fn acquireInstanceLock(io: std.Io, log: *std.Io.Writer) !void {
+/// Lock / startup failures always go to stderr (not the optional stdout log),
+/// so wrappers that only keep stderr — or humans redirecting 2> — can see why
+/// the orb refused to start. `launch1.sh` currently discards both streams;
+/// run without it, or drop the `2>&1` redirect, to observe these messages.
+fn emitStartupError(io: std.Io, comptime fmt: []const u8, args: anytype) void {
+    var buf: [512]u8 = undefined;
+    var stderr_writer = std.Io.File.stderr().writer(io, &buf);
+    const w = &stderr_writer.interface;
+    w.print(fmt, args) catch {};
+    w.flush() catch {};
+}
+
+fn acquireInstanceLock(io: std.Io) void {
     const file = std.Io.Dir.createFileAbsolute(io, LOCK_PATH, .{
         .read = true,
         .truncate = false,
     }) catch |err| {
-        try log.print("error: cannot open instance lock {s}: {t}\n", .{ LOCK_PATH, err });
-        try log.flush();
+        emitStartupError(io, "error: cannot open instance lock {s}: {t}\n", .{ LOCK_PATH, err });
         std.process.exit(1);
     };
     // Keep fd open for process lifetime so the exclusive lock is released by
@@ -160,11 +171,15 @@ fn acquireInstanceLock(io: std.Io, log: *std.Io.Writer) !void {
 
     // Refuse if exclusive lock is held elsewhere, or pidfile points at a live process.
     if (!got_lock or pidIsAlive(meta.pid)) {
-        try log.print(
-            "error: another ada avatar is already running (pid {d}, started {d}, lock: {s})\n",
-            .{ meta.pid, meta.started, LOCK_PATH },
+        emitStartupError(
+            io,
+            "error: another ada avatar is already running (pid {d}, started {d}, lock: {s})\n" ++
+                "       stop it first, or remove a stale lock if that pid is dead:\n" ++
+                "       rm -f {s}\n",
+            .{ meta.pid, meta.started, LOCK_PATH, LOCK_PATH },
         );
-        try log.flush();
+        // Do not leave this process holding the exclusive lock after a refuse.
+        file.close(io);
         std.process.exit(1);
     }
 
@@ -173,13 +188,13 @@ fn acquireInstanceLock(io: std.Io, log: *std.Io.Writer) !void {
     const now: i64 = time(null);
     var wbuf: [64]u8 = undefined;
     const line = std.fmt.bufPrint(&wbuf, "{d}\n{d}\n", .{ std.c.getpid(), now }) catch {
-        try log.print("error: cannot format instance lock {s}\n", .{LOCK_PATH});
-        try log.flush();
+        emitStartupError(io, "error: cannot format instance lock {s}\n", .{LOCK_PATH});
+        file.close(io);
         std.process.exit(1);
     };
     file.writeStreamingAll(io, line) catch |err| {
-        try log.print("error: cannot write instance lock {s}: {t}\n", .{ LOCK_PATH, err });
-        try log.flush();
+        emitStartupError(io, "error: cannot write instance lock {s}: {t}\n", .{ LOCK_PATH, err });
+        file.close(io);
         std.process.exit(1);
     };
 }
@@ -705,27 +720,27 @@ pub fn run(io: std.Io, alloc: std.mem.Allocator, opts: Options, log: *std.Io.Wri
     G.opts = opts;
     G.start_ts = std.Io.Clock.Timestamp.now(io, .awake);
 
-    try acquireInstanceLock(io, log);
+    acquireInstanceLock(io);
 
     if (!opts.solo) {
         // fail fast, with an actionable message per missing service (§9.3)
         G.back_fd = connectBackFd() catch {
-            try log.print(
+            emitStartupError(
+                io,
                 "error: ada back is not reachable (unix://{s})\n" ++
                     "       start it: systemctl --user start ada-back\n" ++
                     "       (or run the orb alone: ada avatar --solo)\n",
                 .{opts.back_sock},
             );
-            try log.flush();
             std.process.exit(1);
         };
         const perc = connectPerceptionLevels() catch {
-            try log.print(
+            emitStartupError(
+                io,
                 "error: perception-voice levels stream is not reachable (unix://{s})\n" ++
                     "       start it: systemctl --user start perception-voice\n",
                 .{opts.perception_sock},
             );
-            try log.flush();
             std.process.exit(1);
         };
         // Presence levels are OPTIONAL for now: the `subscribe levels`
