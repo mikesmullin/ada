@@ -110,19 +110,41 @@ const G = struct {
 };
 
 // ---------------------------------------------------------------------------
-// Single-instance lock: one orb per machine. flock() is held for the
-// process lifetime and released by the kernel on ANY exit (crash included),
-// so there are no stale-lock states to clean up. Anchored to the repo
-// checkout like the rest of this ecosystem's fixed paths.
+// Single-instance lock: pidfile + exclusive file lock.
+// File content (two lines):
+//   <pid>\n
+//   <unix_started_at>\n
+// Refuse if another live avatar is recorded / holds the lock. Stale files
+// (dead pid and free lock) are taken over — same idea as ada-back .back.lock.
 
 const LOCK_PATH = "/workspace/ada/.avatar.lock";
 
-extern "c" fn flock(fd: c_int, operation: c_int) c_int;
-const LOCK_EX: c_int = 2;
-const LOCK_NB: c_int = 4;
+extern "c" fn kill(pid: c_int, sig: c_int) c_int;
+extern "c" fn time(tloc: ?*i64) i64;
+
+fn pidIsAlive(pid: std.posix.pid_t) bool {
+    if (pid <= 0) return false;
+    // kill(pid, 0): 0 = exists; EPERM = exists but not ours; ESRCH = gone.
+    const rc = kill(@intCast(pid), 0);
+    if (rc == 0) return true;
+    return std.posix.errno(rc) == .PERM;
+}
+
+fn readLockMeta(io: std.Io, file: std.Io.File) struct { pid: std.posix.pid_t, started: i64 } {
+    var buf: [128]u8 = undefined;
+    // Positional read from offset 0 (no seek needed).
+    const n = file.readPositionalAll(io, &buf, 0) catch return .{ .pid = 0, .started = 0 };
+    if (n == 0) return .{ .pid = 0, .started = 0 };
+    var it = std.mem.splitScalar(u8, buf[0..n], '\n');
+    const line1 = it.next() orelse "";
+    const line2 = it.next() orelse "";
+    const pid = std.fmt.parseInt(std.posix.pid_t, std.mem.trim(u8, line1, " \t\r"), 10) catch 0;
+    const started = std.fmt.parseInt(i64, std.mem.trim(u8, line2, " \t\r"), 10) catch 0;
+    return .{ .pid = pid, .started = started };
+}
 
 fn acquireInstanceLock(io: std.Io, log: *std.Io.Writer) !void {
-    const file = std.Io.Dir.cwd().createFile(io, LOCK_PATH, .{
+    const file = std.Io.Dir.createFileAbsolute(io, LOCK_PATH, .{
         .read = true,
         .truncate = false,
     }) catch |err| {
@@ -130,24 +152,36 @@ fn acquireInstanceLock(io: std.Io, log: *std.Io.Writer) !void {
         try log.flush();
         std.process.exit(1);
     };
-    if (flock(file.handle, LOCK_EX | LOCK_NB) != 0) {
-        var pid_buf: [32]u8 = undefined;
-        var reader = file.reader(io, &pid_buf);
-        const other = reader.interface.takeDelimiterExclusive('\n') catch "";
+    // Keep fd open for process lifetime so the exclusive lock is released by
+    // the kernel on any exit (including crash). Do not close(file).
+
+    const meta = readLockMeta(io, file);
+    const got_lock = file.tryLock(io, .exclusive) catch false;
+
+    // Refuse if exclusive lock is held elsewhere, or pidfile points at a live process.
+    if (!got_lock or pidIsAlive(meta.pid)) {
         try log.print(
-            "error: another ada avatar is already running{s}{s} (lock: {s})\n",
-            .{ if (other.len > 0) " with pid " else "", other, LOCK_PATH },
+            "error: another ada avatar is already running (pid {d}, started {d}, lock: {s})\n",
+            .{ meta.pid, meta.started, LOCK_PATH },
         );
         try log.flush();
         std.process.exit(1);
     }
-    // lock held: record our pid for diagnostics and keep the fd open forever
-    var wbuf: [32]u8 = undefined;
-    var writer = file.writer(io, &wbuf);
-    writer.interface.print("{d}\n", .{std.c.getpid()}) catch {};
-    writer.interface.flush() catch {};
-    // `file` intentionally never closed — the lock lives exactly as long
-    // as this process does.
+
+    // We hold exclusive lock and peer pid is not live: write our identity.
+    file.setLength(io, 0) catch {};
+    const now: i64 = time(null);
+    var wbuf: [64]u8 = undefined;
+    const line = std.fmt.bufPrint(&wbuf, "{d}\n{d}\n", .{ std.c.getpid(), now }) catch {
+        try log.print("error: cannot format instance lock {s}\n", .{LOCK_PATH});
+        try log.flush();
+        std.process.exit(1);
+    };
+    file.writeStreamingAll(io, line) catch |err| {
+        try log.print("error: cannot write instance lock {s}: {t}\n", .{ LOCK_PATH, err });
+        try log.flush();
+        std.process.exit(1);
+    };
 }
 
 // ---------------------------------------------------------------------------

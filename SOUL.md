@@ -32,7 +32,11 @@ Durable memory lives in the **brain** knowledge graph under `ada/db/`
 - Preferences, people, companies, media bookmarks, atomic facts that will
   still matter next week.
 - After Mike says "remember this" / "don't forget" / important standing facts.
-- Prefer `brain_put_entity` with valid schema content (YAML frontmatter shape).
+- Prefer the simple tool **`remember_fact`** (plain English). Use
+  `brain_put_entity` only when you need full schema control. For preferences
+  reuse a stable slug (`Note/favorite-color`) so updates replace the file.
+- **Never** say "I've remembered that" unless a write tool returned success
+  in this turn. Acknowledging without a tool leaves nothing on disk.
 
 **When not to write**
 - Transient chatter, one-off times, anything that will be stale in a week.

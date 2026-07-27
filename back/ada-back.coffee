@@ -22,6 +22,29 @@ import { clamp, forceInt, forceRx } from './lib/validate.coffee'
 import { initBrowserAgent, runBrowserAgent } from './ada-browser.coffee'
 import { ensureBrainMcp, registerBrainTools } from './lib/mcp-brain.coffee'
 
+# Log every tool call/result so "I remembered" without a disk write is diagnosable.
+wrapToolsWithLogging = (agent) ->
+  for name in Object.keys agent.tools
+    do (name) ->
+      fn = agent.tools[name]
+      wrapped = (ctx, args) ->
+        argPreview = try JSON.stringify(args ? {}).slice(0, 240) catch e then String(args)
+        log "tool → #{name} #{argPreview}"
+        try
+          result = await fn ctx, args
+          # preserve agl-ai metadata on the original fn
+          preview = String(result ? '').replace(/\s+/g, ' ').slice(0, 240)
+          log "tool ← #{name} #{preview}"
+          result
+        catch e
+          log "tool ✗ #{name} #{e.message}"
+          throw e
+      wrapped._name = fn._name
+      wrapped._description = fn._description
+      wrapped._properties = fn._properties
+      wrapped._required = fn._required
+      agent.tools[name] = wrapped
+
 # ---------------------------------------------------------------------------
 # Single-instance lock: a second back would steal the avatar socket and
 # double-run every turn. Pidfile + liveness check (no flock in JS): a
@@ -474,6 +497,9 @@ registerTools = (agent) ->
   # -- long-term memory (brain MCP over stdio) -------------------------------
   registerBrainTools agent
 
+  # After all tools registered: journal every call (name + args + result preview).
+  wrapToolsWithLogging agent
+
 # ---------------------------------------------------------------------------
 # Turn engine
 
@@ -513,9 +539,14 @@ BASE_PROMPT = '''
   whole task to control_browser in one call (it can see and drive my
   actual browser: navigate, read pages, click, fill forms) rather than
   trying to guess at browser tools yourself.
-  Long-term memory lives in the brain graph tools (brain_put_entity,
-  brain_get_entity, brain_search, brain_think, brain_ontology, and related).
-  Prefer brain_put_entity for durable facts (people, notes, preferences).
+  Long-term memory is on disk via tools — you do not remember across
+  restarts unless a tool write succeeds.
+  When Mike says remember / do not forget / states a lasting preference:
+  you MUST call remember_fact (preferred) or brain_put_entity in this turn
+  BEFORE saying you remembered. Never claim success without a successful
+  tool result. Prefer stable slugs (e.g. Note/favorite-color) so updates
+  overwrite the same fact. For "what is my favorite color" use
+  recall_search or brain_get_entity / brain_search.
   Person ids are first-initial + last name lowercased (Mike Smullin is
   Person/msmullin). If earlier conversation was trimmed for length, you
   will see a notice — recover by using brain tools or asking Mike.

@@ -22,6 +22,15 @@ schemaProps = (inputSchema) ->
 schemaRequired = (inputSchema) ->
   inputSchema?.required or []
 
+# Call a raw brain MCP tool by unprefixed name (put_entity, get_entity, …).
+export callBrainTool = (name, args = {}) ->
+  unless client
+    throw new Error 'brain mcp not connected'
+  # Ada updates existing notes often; default overwrite so put_entity is not a no-op.
+  if name is 'put_entity' and args.overwrite is undefined
+    args = Object.assign {}, args, overwrite: true
+  extractText await client.callTool name: name, arguments: args
+
 export ensureBrainMcp = (opts = {}) ->
   return true if client and tools.length
 
@@ -60,19 +69,75 @@ export registerBrainTools = (agent) ->
       # Prefix avoids clashing with future Ada-native tools named search/think/etc.
       name = if tool.name.startsWith('brain_') then tool.name else "brain_#{tool.name}"
       desc = tool.description or "brain #{tool.name}"
-      desc = "[long-term memory] #{desc}"
+      if tool.name is 'put_entity'
+        desc = '[long-term memory] Create or UPDATE an entity. content is YAML ' +
+          'frontmatter (e.g. "body:\\n  body: Mike prefers green.\\n  tags: [preference]\\n"). ' +
+          'slug is Class/id (Note/favorite-color, Person/msmullin). ' +
+          'Always set overwrite=true when replacing an existing fact. ' +
+          'Only say you remembered after this tool succeeds.'
+      else
+        desc = "[long-term memory] #{desc}"
       agent.Tool name, desc,
         schemaProps(tool.inputSchema),
         schemaRequired(tool.inputSchema),
         (ctx, args) ->
           try
-            extractText await client.callTool name: tool.name, arguments: args or {}
+            await callBrainTool tool.name, args or {}
           catch e
             client = null
             tools = []
             started = false
             "brain mcp error: #{e.message}"
 
+  # Simple voice-friendly wrappers — Gemma often skips full put_entity YAML.
+  agent.Tool 'remember_fact',
+    'Save a durable fact or preference Mike wants remembered. Call this when he ' +
+    'says remember, do not forget, or states a lasting preference (favorite color, ' +
+    'names, etc). Only confirm success after this tool returns ok. Prefer a stable ' +
+    'slug like Note/favorite-color so later updates replace the same file.',
+    fact:
+      type: 'string'
+      description: 'plain English fact, e.g. "Mike favorite color is green"'
+    slug:
+      type: 'string'
+      description: 'optional Class/id; default Note/<short-id> from the fact topic'
+  , ['fact'], (ctx, { fact, slug }) ->
+    try
+      text = String(fact or '').trim()
+      return 'brain error: empty fact' unless text
+      id = if slug then String(slug).trim() else defaultNoteSlug text
+      id = "Note/#{id}" unless id.includes '/'
+      # Escape for YAML double-quoted scalar
+      escaped = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+      content = "body:\n  body: \"#{escaped}\"\n  tags:\n    - preference\n"
+      out = await callBrainTool 'put_entity', { slug: id, content, overwrite: true }
+      if out.startsWith 'brain error'
+        out
+      else
+        "ok: saved #{id} — #{text}"
+    catch e
+      "brain error: #{e.message}"
+
+  agent.Tool 'recall_search',
+    'Search long-term memory for a fact or person. Use when Mike asks what you ' +
+    'remember or after a context-compaction notice.',
+    query: { type: 'string', description: 'search phrase, e.g. favorite color' }
+  , ['query'], (ctx, { query }) ->
+    try
+      await callBrainTool 'search', { query: String(query or ''), limit: 5 }
+    catch e
+      "brain error: #{e.message}"
+
 export brainToolNames = ->
-  for t in tools
+  names = for t in tools
     if t.name.startsWith('brain_') then t.name else "brain_#{t.name}"
+  names.concat ['remember_fact', 'recall_search']
+
+# Note/favorite-color style id from free text
+defaultNoteSlug = (fact) ->
+  s = fact.toLowerCase()
+  # common preference patterns
+  if /favorite\s+colou?r/.test(s) then return 'favorite-color'
+  if /favou?rite\s+colou?r/.test(s) then return 'favorite-color'
+  slug = s.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
+  slug or "fact-#{Date.now().toString(36)}"
