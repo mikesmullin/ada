@@ -42,18 +42,25 @@ wrapToolsWithGateAndLogging = (agent) ->
           if gate.needsTom and CFG.confirmEnabled
             log "tool ? #{name} [#{gate.risk}] needs Tom #{argPreview}"
             setState active: true
+            # Pause Ada's speech queue so Tom owns the voice + captions.
+            speaker.clear()
+            stopSpeech()
             tom = await tomConfirm
               toolName: name
               args: args
               risk: gate.risk
               speakOnce: speakOnce
+              broadcast: broadcast
               voiceTom: CFG.voiceTom
               denyPhrases: CFG.denyPhrases
               timeoutMs: CFG.confirmTimeoutMs
               log: log
             unless tom.approved
               log "tool ✗ #{name} Tom #{tom.reason}"
-              return gate.message + " (#{tom.reason})"
+              # Short deterministic result for Ada — Tom already spoke; avoid
+              # Ada re-explaining the phrase (she was "talking for Tom").
+              return "Tom denied the action (#{tom.reason}). Do not invent success. " +
+                "Briefly tell Mike the action did not run; do not repeat Tom's passphrase."
             log "tool → #{name} [#{gate.risk}] Tom approved #{argPreview}"
           else
             log "tool ✗ #{name} blocked risk=#{gate.risk} #{argPreview}"

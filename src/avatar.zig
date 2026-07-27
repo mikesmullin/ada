@@ -345,8 +345,9 @@ fn handleBackLine(line: []const u8) void {
     const msg = parsed.value;
 
     if (std.mem.eql(u8, msg.ev, "caption")) {
-        // who:"ada" (or omitted) → spawn a caption particle.
-        if (msg.who.len == 0 or std.mem.eql(u8, msg.who, "ada")) {
+        // who:"ada" / "tom" / omitted → closed-caption particle (same stack).
+        // Empty who kept for backward compatibility with early ada-back.
+        if (msg.who.len == 0 or std.mem.eql(u8, msg.who, "ada") or std.mem.eql(u8, msg.who, "tom")) {
             spawnCaption(msg.text);
         }
         return;
