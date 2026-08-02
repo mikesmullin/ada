@@ -14,6 +14,8 @@ const HELP =
     \\  ada avatar [options]     open the orb overlay window
     \\  ada coach [options]      M6 coach: plan next step from task list + speak
     \\  ada plan [options]       alias for `ada coach`
+    \\  ada voice [text]         speak text in Ada's voice (+ avatar captions);
+    \\                           reads stdin when no text argument is given
     \\  ada version              print version
     \\  ada help                 this text
     \\
@@ -47,17 +49,17 @@ fn defaultAdaRoot(alloc: std.mem.Allocator) []const u8 {
     return "/workspace/ada";
 }
 
-/// `ada coach` / `ada plan` → `bun back/ada-coach.coffee …` (cwd = back/ for bunfig).
-fn runCoach(io: std.Io, alloc: std.mem.Allocator, args: []const []const u8) !void {
+/// Delegate a subcommand to a Bun coffee script in back/ (cwd = back/ for bunfig).
+fn runBackScript(io: std.Io, alloc: std.mem.Allocator, script_name: []const u8, args: []const []const u8) !void {
     const root = defaultAdaRoot(alloc);
-    const script = try std.fmt.allocPrint(alloc, "{s}/back/ada-coach.coffee", .{root});
+    const script = try std.fmt.allocPrint(alloc, "{s}/back/{s}", .{ root, script_name });
     const back_dir = try std.fmt.allocPrint(alloc, "{s}/back", .{root});
 
     var child_args: std.ArrayList([]const u8) = .empty;
     defer child_args.deinit(alloc);
     try child_args.append(alloc, "bun");
     try child_args.append(alloc, script);
-    // Forward everything after `coach` / `plan`
+    // Forward everything after the subcommand
     var i: usize = 2;
     while (i < args.len) : (i += 1) {
         try child_args.append(alloc, args[i]);
@@ -136,8 +138,13 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
+    if (std.mem.eql(u8, cmd, "voice")) {
+        try runBackScript(init.io, arena, "ada-voice.coffee", args);
+        return;
+    }
+
     if (std.mem.eql(u8, cmd, "coach") or std.mem.eql(u8, cmd, "plan")) {
-        try runCoach(init.io, arena, args);
+        try runBackScript(init.io, arena, "ada-coach.coffee", args);
         return;
     }
 

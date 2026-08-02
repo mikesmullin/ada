@@ -324,6 +324,19 @@ onAvatarEvent = (ev) ->
         maybeIdle()
     when 'click'
       cancelAll 'click'
+    when 'say'
+      # External clients (`ada voice <text>`): speak through the normal
+      # pipeline — per-sentence avatar captions + speaking state, Ada's
+      # configured voice. First sentence interrupts anything mid-flight.
+      # turn=null marks this as TTS-only: do NOT arm the post-speech
+      # conversation window (activationGate 'window') — brain viz / CLI
+      # just want speak + captions, not follow-up STT without a wake word.
+      text = String(ev.text or '').trim()
+      if text
+        log "say (external): #{text.slice(0, 120)}"
+        sentences = text.split(/(?<=[.!?…])\s+/).filter (s) -> s.trim()
+        for s, i in sentences
+          speaker.enqueue s, null, (if i is 0 then 'interrupt' else 'enqueue')
     when 'quit'
       log 'avatar quit'
 
@@ -376,10 +389,14 @@ class Speaker
   pump: ->
     return if @pumping
     @pumping = true
+    # True if any dequeued item belonged to a real dialogue turn (wake/PTT).
+    # External `ada voice` / {ev:'say'} enqueues with turn=null — TTS only.
+    spokeForDialogue = false
     try
       while @queue.length
         { text, turn, schedule } = @queue.shift()
         continue if turn?.cancelled
+        spokeForDialogue = true if turn?
         setState speaking: true
         # Closed captions on the avatar: one line per spoken sentence.
         broadcast { ev: 'caption', who: 'ada', text }
@@ -395,7 +412,11 @@ class Speaker
       setState speaking: false
       # Clear caption after the queue drains (avatar lingers briefly for readability).
       broadcast { ev: 'caption', who: 'ada', text: '' } unless @queue.length
-      unless currentTurn
+      # Arm post-exchange active listening only after dialogue turns.
+      # LLM turns often clear currentTurn before audio finishes; re-arm here so
+      # the window starts when she stops speaking. External say (turn=null) must
+      # NOT arm the window — otherwise ambient speech is treated as a follow-up.
+      if not currentTurn and spokeForDialogue
         convWindowUntil = Date.now() + CFG.convWindowMs
         setTimeout maybeIdle, CFG.convWindowMs + 50
 
@@ -804,8 +825,13 @@ runTurn = (utt, gate) ->
       parallel_tools: true
       stream: true
       system_prompt: SYSTEM_PROMPT
-      on_delta: (d) ->
+      # Gemma-4 / LM Studio streams thinking as reasoning_content. agl-ai
+      # passes those as on_delta(text, { channel: 'reasoning' }). Only speak
+      # and caption the visible assistant content channel.
+      on_delta: (d, meta) ->
         return if turn.cancelled
+        return if meta?.channel is 'reasoning'
+        return unless d
         turn.lat.firstToken = performance.now() if turn.lat.firstToken is null
         turn.reply += d
         splitter.push d

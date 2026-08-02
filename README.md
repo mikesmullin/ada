@@ -4,7 +4,7 @@ Always-on agentic desktop assistant with a visible presence: a procedural
 avatar (Zig + sokol) that reacts to what she hears (your voice) and what
 she says (hers). Inspired by Siri; built on the local stack:
 perception-voice (Whisper STT), presence-voice (Piper/Kokoro TTS),
-lm-studio (`google/gemma-4-12b-qat`), and agl-ai.
+lm-studio (`google/gemma-4-26b-a4b-qat`), and agl-ai.
 
 <p align="center">
   <img src="docs/screenshot-hud.png" alt="ada avatar --style hud, listening and speaking at once">
@@ -52,7 +52,7 @@ systemctl --user daemon-reload && systemctl --user enable --now ada-back
 
 Requires running: `perception-voice` (with the `subscribe` streaming
 interface, deployed), `voice serve` (presence-voice v2), lm-studio on
-:1234 with `google/gemma-4-12b-qat` loaded.
+:1234 with `google/gemma-4-26b-a4b-qat` loaded.
 
 ## config.yaml
 
