@@ -1,12 +1,26 @@
 # Bridges brain's MCP tools into agl-ai: one agent.Tool per brain tool,
 # prefixed brain_* so they don't collide with other Ada tools.
-# Spawns `brain mcp` over stdio with cwd/BRAIN_ROOT pointing at Ada's private db.
+#
+# `brain mcp` is a thin stdio adapter and requires a live `brain server`
+# (that process owns pglite). Ada starts both as her own instance, pinned
+# with `brain --use ada` so other shells can `brain use` freely.
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { spawn as spawnProcess } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
+import yaml from 'js-yaml'
 
 client = null
 tools = []
 started = false
+serverProc = null
+
+ADA_ALIAS = process.env.ADA_BRAIN_ALIAS or 'ada'
+BRAINS_CONFIG_PATH = join(homedir(), '.config', 'brain', 'brains.yaml')
+START_TIMEOUT_MS = Number(process.env.ADA_BRAIN_SERVER_TIMEOUT_MS or 30000)
+POLL_MS = 200
 
 extractText = (result) ->
   if result?.isError
@@ -15,12 +29,84 @@ extractText = (result) ->
   parts = (result.content or []).map (c) -> if c.type is 'text' then c.text else "[#{c.type}]"
   parts.join('\n') or '(no output)'
 
-# jsonSchema properties → agl-ai Tool param map (pass through; empty if none)
 schemaProps = (inputSchema) ->
   inputSchema?.properties or {}
 
 schemaRequired = (inputSchema) ->
   inputSchema?.required or []
+
+sleep = (ms) -> new Promise (resolve) -> setTimeout resolve, ms
+
+# Same path rules as mstack/brain `brain use`: alias → project root (parent of db/).
+resolveAliasPath = (value) ->
+  path = String(value).trim().replace(/^~(?=\/|$)/, homedir())
+  if isAbsolute(path) then path else resolve(dirname(BRAINS_CONFIG_PATH), path)
+
+loadBrainsConfig = ->
+  return {} unless existsSync(BRAINS_CONFIG_PATH)
+  raw = yaml.load(readFileSync(BRAINS_CONFIG_PATH, 'utf8')) or {}
+  unless raw? and typeof raw is 'object' and not Array.isArray(raw) then {} else raw
+
+# Prefer the named `brain use` alias (default: ada). Fallback: opts / env / cwd db/.
+export resolveAdaBrain = (opts = {}) ->
+  alias = opts.alias or ADA_ALIAS
+  brains = loadBrainsConfig()
+  if typeof brains[alias] is 'string'
+    cwd = resolveAliasPath(brains[alias])
+    return { alias, cwd, root: join(cwd, 'db') }
+  cwd = opts.cwd or process.env.ADA_BRAIN_CWD or new URL('../../', import.meta.url).pathname
+  cwd = cwd.replace(/\/$/, '')
+  root = opts.root or process.env.BRAIN_ROOT or process.env.ADA_BRAIN or "#{cwd}/db"
+  { alias: null, cwd, root }
+
+isBrainServerRunning = (root) ->
+  existsSync join(root, '.sock')
+
+# Pin this child to an alias via `brain --use` so a later `brain use` in
+# another shell cannot retarget Ada's server/mcp. Does not persist.
+brainCliArgs = (alias, rest) ->
+  if alias then ['--use', alias, rest...] else rest
+
+childEnv = (root, alias) ->
+  env = Object.assign {}, process.env
+  if alias
+    # --use is the pin; a leftover BRAIN_ROOT must not override it.
+    delete env.BRAIN_ROOT
+  else
+    env.BRAIN_ROOT = root
+  env
+
+# Long-running pglite owner. Detached so a later ada-back restart can reuse it.
+startBrainServer = (brainCmd, cwd, root, alias, env) ->
+  args = brainCliArgs alias, ['server', 'start']
+  console.error "brain server: not running for #{root}, starting (#{brainCmd} #{args.join ' '})..."
+  child = spawnProcess brainCmd, args,
+    cwd: cwd
+    env: env
+    detached: true
+    stdio: ['ignore', 'pipe', 'pipe']
+  serverProc = child
+  prefix = (buf) ->
+    for line in String(buf).split(/\r?\n/) when line.trim()
+      console.error "brain server: #{line}"
+  child.stdout?.on 'data', prefix
+  child.stderr?.on 'data', prefix
+  child.on 'error', (e) ->
+    console.error "brain server: failed to spawn (#{e.message})"
+  child.on 'exit', (code, signal) ->
+    # Exit 1 is also "already running" — treat missing sock as the real failure.
+    unless isBrainServerRunning(root)
+      console.error "brain server: exited code=#{code} signal=#{signal or ''} (no sock at #{root}/.sock)"
+    if serverProc is child
+      serverProc = null
+  child.unref()
+
+waitForBrainServer = (root, timeoutMs) ->
+  deadline = Date.now() + timeoutMs
+  until isBrainServerRunning(root)
+    return false if Date.now() > deadline
+    await sleep POLL_MS
+  true
 
 # Call a raw brain MCP tool by unprefixed name (put_entity, get_entity, …).
 export callBrainTool = (name, args = {}) ->
@@ -29,36 +115,56 @@ export callBrainTool = (name, args = {}) ->
   # Ada updates existing notes often; default overwrite so put_entity is not a no-op.
   if name is 'put_entity' and args.overwrite is undefined
     args = Object.assign {}, args, overwrite: true
+  # Voice path has no copilot token; keyword search works against the live index.
+  if name is 'search' and args.strategy is undefined
+    args = Object.assign {}, args, strategy: 'keyword'
   extractText await client.callTool name: name, arguments: args
+
+connectBrainMcp = (brainCmd, cwd, root, alias, env) ->
+  transport = new StdioClientTransport
+    command: brainCmd
+    args: brainCliArgs alias, ['mcp']
+    cwd: cwd
+    env: env
+    stderr: 'pipe'
+  transport.stderr?.on 'data', (buf) ->
+    for line in String(buf).split(/\r?\n/) when line.trim()
+      console.error "brain mcp: #{line}"
+  c = new Client name: 'ada-back', version: '0.1.0'
+  await c.connect transport
+  { tools: discovered } = await c.listTools()
+  client = c
+  tools = discovered or []
+  started = true
+  pin = if alias then "--use #{alias}" else "BRAIN_ROOT=#{root}"
+  console.error "brain mcp: #{tools.length} tools (#{pin} root=#{root})"
+  true
 
 export ensureBrainMcp = (opts = {}) ->
   return true if client and tools.length
 
+  { cwd, root, alias } = resolveAdaBrain(opts)
   brainCmd = opts.command or process.env.ADA_BRAIN_CMD or 'brain'
-  brainCwd = opts.cwd or process.env.ADA_BRAIN_CWD or new URL('../../', import.meta.url).pathname
-  brainRoot = opts.root or process.env.BRAIN_ROOT or process.env.ADA_BRAIN or "#{brainCwd.replace(/\/$/, '')}/db"
+  env = childEnv root, alias
+
+  unless existsSync(root)
+    console.error "brain mcp: no db at #{root} (alias=#{alias or 'none'})"
+    return false
 
   try
-    # Inherit a safe env subset + full PATH, force BRAIN_ROOT for this process tree.
-    env = Object.assign {}, process.env,
-      BRAIN_ROOT: brainRoot
-    transport = new StdioClientTransport
-      command: brainCmd
-      args: ['mcp']
-      cwd: brainCwd
-      env: env
-      stderr: 'pipe'
-    c = new Client name: 'ada-back', version: '0.1.0'
-    await c.connect transport
-    { tools: discovered } = await c.listTools()
-    client = c
-    tools = discovered or []
-    started = true
-    console.error "brain mcp: #{tools.length} tools (BRAIN_ROOT=#{brainRoot})"
+    unless isBrainServerRunning(root)
+      startBrainServer brainCmd, cwd, root, alias, env
+      unless await waitForBrainServer(root, START_TIMEOUT_MS)
+        console.error "brain mcp: brain server did not become ready within #{START_TIMEOUT_MS}ms (#{root}/.sock)"
+        return false
+      console.error "brain server: ready (#{root}/.sock)"
+
+    await connectBrainMcp brainCmd, cwd, root, alias, env
     true
   catch e
     client = null
     tools = []
+    started = false
     console.error "brain mcp: connect failed (#{e.message})"
     false
 
@@ -132,15 +238,27 @@ export registerBrainTools = (agent) ->
   , ['query'], (ctx, { query }) ->
     try
       q = String(query or '')
-      out = await callBrainTool 'search', { query: q, limit: 5 }
+      chunks = []
+      primary = await callBrainTool 'search', { query: q, limit: 5 }
+      chunks.push primary
+      # Keyword FTS is AND; a long phrase can miss when any one token is absent.
+      if searchLooksEmpty(primary)
+        for token in q.split(/\s+/).filter((w) -> w.length > 2)
+          hit = await callBrainTool 'search', { query: token, limit: 4 }
+          chunks.push "# token #{token}\n#{hit}" unless searchLooksEmpty(hit)
+      # "family" is not a stored token; household notes say kids / wife / Smullin.
+      if /famil|household|people|who.*(know|related)/i.test(q)
+        for token in ['Smullin', 'kids', 'wife']
+          hit = await callBrainTool 'search', { query: token, limit: 5 }
+          chunks.push "# household #{token}\n#{hit}" unless searchLooksEmpty(hit)
       # Deterministic fallback for the well-known preference slug when search is empty
       # or only returns ghosts (should be rare after brain index sync).
       if /favorite\s+colou?r|favou?rite\s+colou?r/i.test(q)
         try
           direct = await callBrainTool 'get_entity', { slug: 'Note/favorite-color' }
           unless direct.startsWith 'brain error'
-            out = "#{out}\n\n# direct get Note/favorite-color\n#{direct}"
-      out
+            chunks.push "# direct get Note/favorite-color\n#{direct}"
+      chunks.join '\n\n'
     catch e
       "brain error: #{e.message}"
 
@@ -148,6 +266,11 @@ export brainToolNames = ->
   names = for t in tools
     if t.name.startsWith('brain_') then t.name else "brain_#{t.name}"
   names.concat ['remember_fact', 'recall_search']
+
+searchLooksEmpty = (text) ->
+  s = String(text or '').trim()
+  return true if not s or s is '[]' or s is 'results: []'
+  /brain error:/i.test(s)
 
 # Note/favorite-color style id from free text
 defaultNoteSlug = (fact) ->

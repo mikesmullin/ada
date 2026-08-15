@@ -1,12 +1,13 @@
-# Pre-tool announce: short spoken status before a tool body runs.
-# Instant tools use a deterministic phrase (no LLM). Others try a microagent
-# with a hard timeout; on timeout we abort the agent so it cannot keep nudging
-# the model forever (output-tool required loop).
+# Pre-tool announce: short status line before a tool body runs.
+# Shown as a closed caption only (ada-back does not TTS these). Instant tools
+# use a deterministic phrase (no LLM). Others try a microagent with a hard
+# timeout; on timeout we abort the agent so it cannot keep nudging the model
+# forever (output-tool required loop).
 import Agent from 'agl-ai'
 
 SYSTEM = '''
-You write a single short spoken status line for a voice assistant that is
-about to run a tool. The line is read aloud immediately, so:
+You write a single short status line for a voice assistant that is
+about to run a tool. The line is shown as a closed caption (not spoken), so:
 
 - One short phrase only (about 3–8 words). Prefer progressive/participial
   form: "checking your task list", "saving that to memory",
@@ -45,6 +46,7 @@ FAST_TOOLS = new Set [
   'brain_graph'
   'brain_schema_methods'
   'brain_method_invoke'
+  'brain_schema_orphans'
 ]
 
 # Cap microagent latency; on timeout abort the agent and use deterministic fallback.
@@ -83,7 +85,7 @@ startMicroagent = (toolName, args, model) ->
     system_prompt: SYSTEM
     output_tool:
       name: 'announce'
-      description: 'Emit the short spoken status line for the tool about to run.'
+      description: 'Emit the short caption status line for the tool about to run.'
       parameters:
         speech:
           type: 'string'
@@ -101,7 +103,7 @@ startMicroagent = (toolName, args, model) ->
     prompt: """
       <tool-name>#{toolName}</tool-name>
       <tool-args>#{argJson}</tool-args>
-      Produce the announce speech via the announce tool.
+      Produce the announce caption via the announce tool.
       """
   .then ->
     speech or agent.last_output?.speech or agent.last_output

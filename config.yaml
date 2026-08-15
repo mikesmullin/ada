@@ -5,7 +5,7 @@
 
 # Voice preset name, as defined in /workspace/voice/config.yaml's `voices:`
 # map (e.g. ada, nicole, bella, norman, lessac, ...).
-voice: nova
+voice: ada
 # Tom the Security Guy (M4) — Kokoro michael for confirmation challenges.
 voice_tom: michael
 

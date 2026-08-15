@@ -25,6 +25,7 @@ DEFAULT_RISK =
   brain_delete_entity: 'medium'
   brain_schema_methods: 'low'
   brain_method_invoke: 'medium'
+  brain_schema_orphans: 'low'
   todo_lists: 'low'
   todo_next: 'low'
   todo_tree: 'low'

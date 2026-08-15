@@ -27,7 +27,13 @@ After=perception-voice.service voice.service
 [Service]
 Type=simple
 WorkingDirectory=/workspace/ada/back
-ExecStart=%h/.bun/bin/bun ada-back.coffee
+# Load FAV_LOCAL_LLM (and other env) from ~/.bashrc — systemd --user units
+# don't source ~/.bashrc by default, and ~/.bashrc has an early
+# `[[ $- != *i* ]] && return` guard so a plain `source ~/.bashrc` in a
+# non-interactive shell would exit before reaching the FAV_LOCAL_LLM export.
+# `bash -ic` forces an interactive shell so ~/.bashrc is fully sourced.
+# Hard-coded to /home/user for portability (also works with %h).
+ExecStart=/bin/bash -ic 'exec %h/.bun/bin/bun ada-back.coffee'
 Restart=on-failure
 RestartSec=3
 Environment=PULSE_SERVER=unix:/run/user/%U/pulse/native
@@ -35,10 +41,10 @@ Environment=PULSE_SERVER=unix:/run/user/%U/pulse/native
 # user manager's default PATH is just /usr/local/bin:/usr/bin, which makes
 # tools fail with command-not-found.
 Environment=PATH=%h/.local/bin:%h/.bun/bin:/usr/local/bin:/usr/bin:/bin
-# systemd --user units don't source ~/.bashrc, so FAV_LOCAL_LLM (the
-# default model, set in ~/.bashrc for interactive/manual runs) has to be
-# mirrored here too. Keep this in sync with ~/.bashrc's export.
-Environment=FAV_LOCAL_LLM=lm-studio:google/gemma-4-26b-a4b-qat
+# FAV_LOCAL_LLM is now inherited from /home/user/.bashrc via `bash -ic` above
+# (currently lm-studio:google/gemma-4-12b-qat). No Environment= line needed.
+# To override without editing ~/.bashrc, uncomment:
+# Environment=FAV_LOCAL_LLM=lm-studio:google/gemma-4-12b-qat
 
 [Install]
 WantedBy=default.target

@@ -20,7 +20,7 @@ import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from
 import { spawn } from './lib/spawn.coffee'
 import { clamp, forceInt, forceRx } from './lib/validate.coffee'
 import { initBrowserAgent, runBrowserAgent } from './ada-browser.coffee'
-import { ensureBrainMcp, registerBrainTools } from './lib/mcp-brain.coffee'
+import { ensureBrainMcp, registerBrainTools, resolveAdaBrain } from './lib/mcp-brain.coffee'
 import { ensureTodoMcp, registerTodoTools } from './lib/mcp-todo.coffee'
 import { checkToolGate } from './lib/tool-gate.coffee'
 import {
@@ -98,15 +98,15 @@ wrapToolsWithGateAndLogging = (agent) ->
             await waitWaveThenRun wave
             log "tool → #{name} [#{gate.risk}] #{argPreview}"
 
-          # Pre-tool announce — interrupt so Ada cuts any residual Tom audio.
+          # Pre-tool status: caption only, never TTS. Conversation stays
+          # natural to the ear; the last caption shows which tool she hung on.
           try
             line = await announceTool
               toolName: name
               args: args
               model: CFG.model
               log: log
-            if line
-              speaker.enqueue line, currentTurn, 'interrupt'
+            speaker.caption line if line
           catch e
             log "announce error: #{e.message}"
 
@@ -209,6 +209,13 @@ config = loadConfig() or {}
 
 ADA_ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '')
 
+# Prefer the `ada` alias from `brain use` so Ada's MCP instance hits her db
+# even if some other brain is selected in an interactive shell.
+ADA_BRAIN = resolveAdaBrain
+  cwd: process.env.ADA_BRAIN_CWD or ADA_ROOT
+  root: process.env.ADA_BRAIN or process.env.BRAIN_ROOT or
+    config.brain_path or "#{ADA_ROOT}/db"
+
 CFG =
   backSock: process.env.ADA_BACK_SOCK or
     "#{process.env.XDG_RUNTIME_DIR or '/tmp'}/ada-back.sock"
@@ -226,9 +233,9 @@ CFG =
   # Persistent context-window YAML (gl1-style messages; survives ada-back restart).
   ctxLogPath: process.env.ADA_CTX_LOG or config.context?.log or
     ctxLogDefaultPath(ADA_ROOT)
-  brainPath: process.env.ADA_BRAIN or process.env.BRAIN_ROOT or
-    config.brain_path or "#{ADA_ROOT}/db"
-  brainCwd: process.env.ADA_BRAIN_CWD or ADA_ROOT
+  brainPath: ADA_BRAIN.root
+  brainCwd: ADA_BRAIN.cwd
+  brainAlias: ADA_BRAIN.alias or 'ada'
   taskShared: process.env.TODO_SHARED or process.env.ADA_TASK_SHARED or
     config.task_lists?.shared or '/workspace/Biz/EM/Agent/ada-shared.task.md'
   allowlistPath: process.env.ADA_ALLOWLIST or config.allowlist_file or
@@ -382,6 +389,13 @@ class Speaker
     @queue.push { text: clean, turn, schedule }
     @pump()
 
+  # Closed caption with no TTS / speaking-state. Tool-status lines use this
+  # so the avatar shows the last call without interrupting the conversation.
+  caption: (text, who = 'ada') ->
+    clean = String(text or '').replace(/[\t\n]+/g, ' ').trim()
+    return unless clean
+    broadcast { ev: 'caption', who, text: clean }
+
   clear: ->
     @queue.length = 0
     broadcast { ev: 'caption', who: 'ada', text: '' }
@@ -524,6 +538,12 @@ shellTool = (shellLine, timeoutMs = 10000, setKill = null) ->
     "failed: #{shellLine} — #{e.message}"
 
 registerTools = (agent) ->
+  # Self-heal: if brain mcp wasn't up at process start (or dropped mid-day),
+  # start Ada's stdio instance against the `ada` database and register tools.
+  await ensureBrainMcp
+    cwd: CFG.brainCwd
+    root: CFG.brainPath
+    alias: CFG.brainAlias
   # -- home lights, ported from agl home.mjs --------------------------------
   agent.Tool 'desk_light',
     'control power and/or light color emitted by my govee RGB LED desk lamp. ' +
@@ -835,7 +855,7 @@ runTurn = (utt, gate) ->
         turn.lat.firstToken = performance.now() if turn.lat.firstToken is null
         turn.reply += d
         splitter.push d
-    registerTools agent
+    await registerTools agent
     await agent.run prompt: renderPrompt(utt.text)
   catch e
     log "turn #{turn.id} error: #{e.message}"
@@ -987,11 +1007,14 @@ main = ->
   # optional: the browser sub-agent, only if mcp-zen is running
   await initBrowserAgent()
 
-  # long-term memory: brain MCP (stdio). Failure is non-fatal — home tools still work.
+  # long-term memory: Ada's own `brain mcp` over stdio, pointed at the `ada`
+  # `brain use` database. Starts `brain server` for that db if it isn't up.
+  # Failure is non-fatal — home tools still work; the next turn retries.
   brainOk = await ensureBrainMcp
     cwd: CFG.brainCwd
     root: CFG.brainPath
-  log if brainOk then "brain mcp ready (#{CFG.brainPath})" else 'brain mcp unavailable'
+    alias: CFG.brainAlias
+  log if brainOk then "brain mcp ready (#{CFG.brainAlias} #{CFG.brainPath})" else 'brain mcp unavailable'
 
   todoOk = await ensureTodoMcp shared: CFG.taskShared
   log if todoOk then "todo mcp ready (#{CFG.taskShared})" else 'todo mcp unavailable'

@@ -31,6 +31,7 @@ brain_put_entity
 brain_delete_entity
 brain_schema_methods
 brain_method_invoke
+brain_schema_orphans
 
 # -- tasks (todo MCP) -------------------------------------------------------
 todo_lists
