@@ -38,6 +38,7 @@ export runBrowserAgent = (task) ->
     return 'Browser control is not available right now (mcp-zen could not be started).'
   agent = await Agent.factory
     model: MODEL
+    reasoning_effort: 'xhigh'
     parallel_tools: true
     system_prompt: BROWSER_SYSTEM_PROMPT
   registerMcpZenTools agent

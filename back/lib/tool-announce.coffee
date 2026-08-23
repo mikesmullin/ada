@@ -80,6 +80,7 @@ startMicroagent = (toolName, args, model) ->
   speech = null
   agent = await Agent.factory
     model: model
+    reasoning_effort: 'low'
     max_tokens: 48
     tool_choice: 'required'
     system_prompt: SYSTEM

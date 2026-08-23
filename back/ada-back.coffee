@@ -842,6 +842,7 @@ runTurn = (utt, gate) ->
     # own dead splitter, never the new turn's
     agent = await Agent.factory
       model: CFG.model
+      reasoning_effort: 'low'
       parallel_tools: true
       stream: true
       system_prompt: SYSTEM_PROMPT

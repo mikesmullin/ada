@@ -212,6 +212,7 @@ main = ->
   # then agl's coach_plan nudge loop never completes.
   agent = await Agent.factory
     model: model
+    reasoning_effort: 'xhigh'
     tool_choice: 'required'
     system_prompt: SYSTEM
     output_tool:
