@@ -18,7 +18,13 @@ import yaml from 'js-yaml'
 import net from 'node:net'
 import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'fs'
 import { spawn } from './lib/spawn.coffee'
-import { clamp, forceInt, forceRx } from './lib/validate.coffee'
+import { clamp, forceInt } from './lib/validate.coffee'
+import {
+  alarm__create, alarm__list, alarm__update, alarm__delete
+  alarm__show, alarm__snooze
+  timer__create, timer__dismiss, timer__show
+} from '/workspace/agl-common/lib/tool/adb.coffee'
+import { desk_light, pc_light_color } from '/workspace/agl-common/lib/tool/home.coffee'
 import { initBrowserAgent, runBrowserAgent } from './ada-browser.coffee'
 import { ensureBrainMcp, registerBrainTools, resolveAdaBrain } from './lib/mcp-brain.coffee'
 import { ensureTodoMcp, registerTodoTools } from './lib/mcp-todo.coffee'
@@ -544,48 +550,18 @@ registerTools = (agent) ->
     cwd: CFG.brainCwd
     root: CFG.brainPath
     alias: CFG.brainAlias
-  # -- home lights, ported from agl home.mjs --------------------------------
-  agent.Tool 'desk_light',
-    'control power and/or light color emitted by my govee RGB LED desk lamp. ' +
-    'If the request names or implies a color (e.g. "turn it blue"), you MUST provide r, g, and b together. ' +
-    'Only provide power when the request is purely about turning the lamp on/off, with no color mentioned.',
-    power: { type: 'boolean', description: 'turn the lamp on or off. omit unless the request is only about power.' }
-    r: { type: 'integer', description: 'red 0-255, required together with g and b when a color is requested.' }
-    g: { type: 'integer', description: 'green 0-255, required together with r and b when a color is requested.' }
-    b: { type: 'integer', description: 'blue 0-255, required together with r and g when a color is requested.' }
-    brightness: { type: 'integer', description: 'range 0-35; perceived brightness is non-linear, finer at low values.' }
-  , [], (ctx, { power, r, g, b, brightness }) ->
-    result = ''
-    if typeof power is 'boolean'
-      res = await runCmd 'govee', [if power then 'on' else 'off']
-      result += if res.ok then "lamp power is now #{if power then 'on' else 'off'}. " \
-                else "failed to set lamp power (#{res.out}). "
-    if r isnt undefined or g isnt undefined or b isnt undefined
-      r = clamp forceInt(r, 0), 0, 255
-      g = clamp forceInt(g, 0), 0, 255
-      b = clamp forceInt(b, 0), 0, 255
-      res = await runCmd 'govee', ['rgb', r, g, b]
-      result += if res.ok then "lamp color is now rgb(#{r},#{g},#{b}). " \
-                else "failed to set lamp color (#{res.out}). "
-    if brightness
-      brightness = clamp forceInt(brightness, 0), 0, 35
-      res = await runCmd 'govee', ['brightness', brightness]
-      result += if res.ok then "lamp brightness=#{brightness}." \
-                else "failed to set lamp brightness (#{res.out})."
-    result or 'no lamp action requested.'
-
-  agent.Tool 'pc_light_color',
-    'control light color emitted by my desktop PC tower chassis LED strip',
-    color: { type: 'string', description: 'hex format, e.g. FF0000' }
-    brightness: { type: 'integer', description: 'range 0-50. default 50' }
-  , ['color'], (ctx, { color, brightness = 50 }) ->
-    color = forceRx /^[0-9A-Fa-f]{6}$/, color, '000000'
-    brightness = clamp forceInt(brightness, 0), 0, 50
-    res = await runCmd 'openrgb', ['-d', '0', '--mode', 'static', '--color', color, '--brightness', brightness]
-    if res.ok
-      "PC light is now color=#{color} brightness=#{brightness}."
-    else
-      "failed to set PC light color (#{res.out})."
+  # -- home lights + pixel alarm (shared with agl home.mjs) -----------------
+  agent.Tool desk_light
+  agent.Tool pc_light_color
+  agent.Tool alarm__create
+  agent.Tool alarm__list
+  agent.Tool alarm__update
+  agent.Tool alarm__delete
+  agent.Tool alarm__show
+  agent.Tool alarm__snooze
+  agent.Tool timer__create
+  agent.Tool timer__dismiss
+  agent.Tool timer__show
 
   # -- media keys ------------------------------------------------------------
   # MPRIS via playerctl (what the hardware media keys map to on any desktop
@@ -719,11 +695,20 @@ BASE_PROMPT = '''
   over empty promises: if you say you will remember or look something up,
   call the tool in this turn.
   You can control the home with tools. There are two independently
-  controllable lights: the desk lamp (desk_light) and the PC tower LED
-  strip (pc_light_color). When the user says "lights" (plural) or does
-  not name a specific light, apply the request to BOTH lights. Call each
-  necessary tool at most once. You can also launch desktop apps by their
-  program name (run_application, e.g. audacity, discord), run
+  controllable lights: the desk lamp (desk_light) and the PC tower lights
+  (pc_light_color; chassis LED strip and GPU RGB together). When the user
+  says "lights" (plural) or does not name a specific light, apply the
+  request to BOTH lights. You can manage alarms on Mike's Google Pixel
+  Clock app with alarm__create, alarm__list, alarm__update,
+  alarm__delete, alarm__show, alarm__snooze, and timers with
+  timer__create, timer__dismiss, timer__show. Convert spoken times to
+  24-hour hour (0-23) and minute (0-59); e.g. "8am" is hour=8 minute=0,
+  "8:30pm" is hour=20 minute=30. Timer length is seconds (5 minutes is
+  300). Prefer matching existing alarms by label when deleting or
+  updating. alarm__list only reports the next scheduled alarm (Clock has
+  no list intent). alarm__snooze only affects a currently ringing alarm.
+  Call each necessary tool at most once. You can also launch
+  desktop apps by their program name (run_application, e.g. audacity, discord), run
   predefined activity commands (run_activity_command), and control media
   playback and system volume like keyboard media keys (media_control).
   If asked to look something up or do something on a website, delegate the

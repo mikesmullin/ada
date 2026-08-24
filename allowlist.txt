@@ -11,6 +11,15 @@ current_time
 # -- home -------------------------------------------------------------------
 desk_light
 pc_light_color
+alarm__create
+alarm__list
+alarm__update
+alarm__delete
+alarm__show
+alarm__snooze
+timer__create
+timer__dismiss
+timer__show
 media_control
 run_application
 run_activity_command
