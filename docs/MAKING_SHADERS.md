@@ -24,11 +24,11 @@ GL/GLES/Metal/HLSL/WGSL so don't use GL-only tricks.
 layout(binding=0) uniform fs_params {
     vec4 res_time;  // x: width px, y: height px, z: time s, w: press 0..1
     vec4 states_a;  // x: idle, y: listening, z: active, w: thinking
-    vec4 states_b;  // x: speaking, y: back-connected, z,w: unused
+    vec4 states_b;  // x: speaking, y: back-connected, z: ear phase, w: ear remain
     vec4 user_a;    // x: rms, yzw: band 0..2      (mic / the user)
     vec4 user_b;    // x: band 3, y: attack env, z: vad, w: unused
     vec4 ada_a;     // x: rms, yzw: band 0..2      (tts / ada)
-    vec4 ada_b;     // x: band 3, y: attack env, z,w: unused
+    vec4 ada_b;     // x: band 3, y: attack env, z: tom-confirm 0/1, w: hover 0/1/2
 };
 ```
 
@@ -42,6 +42,11 @@ Semantics you can rely on:
   ~1 in practice, so "listening" visuals must be *subtle* — idle is the
   resting look, listening only adds a whisper of reactivity.
 - `press` is PTT feedback (left button held on the window).
+- `ada_b.z` (`confirm`) is 1 while Tom is waiting for approve/deny. Draw the
+  green check / red X at the same NDC positions as the host hit-test
+  (`(0.620, 0.640)` / `(0.766, 0.640)`, radius `0.0525`, below the rec pip at
+  `(0.78, 0.78)`; X right-edge matches the pip). `ada_b.w` is hover: 0 none,
+  1 yes, 2 no. Snap, don't smooth.
 - `connected` < 1 means the back is unreachable: the style must have a
   clearly "wounded" look (both existing styles desaturate toward dim red
   and slow/stall their motion).
@@ -67,6 +72,7 @@ should keep the hue semantics unless he asks otherwise:
 | thinking | **violet** |
 | Ada's voice / core | **warm bright cyan-white** |
 | back lost | dim **red**, motion stalled |
+| Tom confirm check / X | **green** approve, **red** deny (top-right, below rec pip) |
 
 ## Techniques that work (learned the hard way)
 

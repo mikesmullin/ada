@@ -29,7 +29,7 @@ const HELP =
     \\avatar options:
     \\  --solo                   no services: keyboard-driven states
     \\                           (1 idle, 2 listening, 3 active, 4 thinking,
-    \\                            5 speaking, space pulse, q/esc quit)
+    \\                            5 speaking, 6 tom confirm, space pulse, q/esc quit)
     \\  --style orb|hud          visual style (default hud):
     \\                             orb: glowing liquid orb
     \\                             hud: holographic reticle w/ radial spectrums
@@ -39,7 +39,8 @@ const HELP =
     \\  --presence-sock PATH     default /tmp/presence-voice.sock
     \\
     \\orb input: hold left button = push-to-talk; short click = cancel.
-    \\The production avatar ignores the keyboard.
+    \\When Tom is waiting, green check / red X (top-right, below rec pip)
+    \\are clickable approve / deny. The production avatar ignores the keyboard.
     \\
 ;
 

@@ -39,7 +39,9 @@ ada avatar --solo                # no services: 1-5 toggle states, space pulse
 Orb input: **hold left button = push-to-talk** (talk until you release —
 no max hold), short click = cancel
 listen if she is actively listening (wake-word gathering or `listen`
-tool), otherwise cancel speech / the turn. The avatar ignores the
+tool), otherwise cancel speech / the turn. While Tom is waiting, a
+**green check / red X** appear under the rec pip — click to approve or
+deny that challenge (voice still works). The avatar ignores the
 keyboard in production (voice-keyboard STT was closing it); `q`/`esc`
 quit only in `--solo`. Voice activation: say "Ada …" (transcript
 matching). She does not keep listening after she answers unless she

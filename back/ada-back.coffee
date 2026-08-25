@@ -26,7 +26,8 @@ import { ensureTodoMcp } from './lib/mcp-todo.coffee'
 import {
   joinToolWave, registerToolWaveGate, runTomInWave
   feedUtterance as tomFeedUtterance, isWaiting as tomIsWaiting
-  denyAllPending as tomDenyAllPending
+  denyAllPending as tomDenyAllPending, decideFromClick as tomDecideFromClick
+  isConfirmPending as tomConfirmPending
 } from './lib/tom.coffee'
 import {
   startProgress, stopProgress, isWaiting as progressIsWaiting
@@ -209,7 +210,7 @@ log = (a...) -> console.log "[#{new Date().toISOString().slice 11, 23}]", a...
 # ---------------------------------------------------------------------------
 # State machine + avatar socket server (JSON lines)
 
-state = { listening: false, active: false, thinking: false, speaking: false, ear: 0, ear_t: 0 }
+state = { listening: false, active: false, thinking: false, speaking: false, ear: 0, ear_t: 0, confirm: false }
 avatars = new Set()
 
 broadcast = (obj) ->
@@ -339,6 +340,11 @@ onAvatarEvent = (ev) ->
           runTurn { text, t_end: now }, 'ptt'
         else
           maybeIdle()
+    when 'confirm'
+      ok = ev.ok is true
+      if tomDecideFromClick ok
+        log "click: tom #{if ok then 'approve' else 'deny'}"
+        setConfirmUi false
     when 'click'
       # Sfx already played on PTT-up (click-off interrupts squelch).
       if listenSession?
@@ -384,6 +390,16 @@ syncActive = ->
     setEar 0
 
 maybeIdle = syncActive
+
+# Tom check/X: shown while a challenge is live, hidden only when none remain
+# (including the next queued Tom, so the pair does not flicker between).
+setConfirmUi = (waiting) ->
+  if waiting
+    setState confirm: true
+  else
+    setTimeout ->
+      setState confirm: false unless tomConfirmPending()
+    , 0
 
 # ---------------------------------------------------------------------------
 # sfx feedback (borrowed from /workspace/whisper's proven set)
@@ -1067,6 +1083,7 @@ tomApprover = (req) ->
     denyPhrases: CFG.denyPhrases
     timeoutMs: CFG.confirmTimeoutMs
     log: log
+    onWaiting: setConfirmUi
   if tom.approved then 'allow' else 'deny'
 
 persistSessionId = (id) ->

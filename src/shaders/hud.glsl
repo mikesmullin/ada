@@ -24,7 +24,7 @@ layout(binding=0) uniform fs_params {
     vec4 user_a;    // x: rms, yzw: band 0..2      (mic / the user)
     vec4 user_b;    // x: band 3, y: attack env, z: vad, w: unused
     vec4 ada_a;     // x: rms, yzw: band 0..2      (tts / ada)
-    vec4 ada_b;     // x: band 3, y: attack env, z,w: unused
+    vec4 ada_b;     // x: band 3, y: attack env, z: tom-confirm 0/1, w: hover 0/1/2
 };
 
 in vec2 uv;
@@ -79,6 +79,33 @@ float spectrum(float r, float th, float base, float dir, float maxLen,
     float f = fract(pos * nbars);
     float ang = smoothstep(0.12, 0.20, f) * smoothstep(0.88, 0.80, f);
     return radial * ang * (0.35 + amp);
+}
+
+// Tom confirm pair. Layout MUST match avatar.zig hit-test constants
+// (yes 0.620,0.640 / no 0.766,0.640 / r 0.0525). Rec pip is (0.78,0.78).
+float sdSeg(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+vec3 confirmBtn(vec2 uv, vec2 c, float r, vec3 hue, float is_no, float lit, float t) {
+    vec2 p = uv - c;
+    float d = length(p);
+    float aa = fwidth(d) * 1.4;
+    float disc = smoothstep(r + aa, r - aa * 0.2, d);
+    float ring = 1.0 - smoothstep(0.0, aa * 1.8, abs(d - r * 0.90) - 0.010);
+    float halo = exp(-d * d / (r * r) * 5.5);
+    vec2 q = p / max(r, 1e-4);
+    float ic = mix(
+        min(sdSeg(q, vec2(-0.42, 0.05), vec2(-0.10, -0.40)),
+            sdSeg(q, vec2(-0.10, -0.40), vec2(0.46, 0.38))) - 0.11,
+        min(sdSeg(q, vec2(-0.34, -0.34), vec2(0.34, 0.34)),
+            sdSeg(q, vec2(-0.34, 0.34), vec2(0.34, -0.34))) - 0.10,
+        is_no);
+    float glyph = 1.0 - smoothstep(0.0, fwidth(ic) * 1.4, ic);
+    float k = mix(0.55, 1.20, lit) * (0.88 + 0.12 * sin(t * 3.1));
+    return hue * ((disc * 0.16 + ring * 0.95 + glyph * 1.20 + halo * 0.25) * k);
 }
 
 void main() {
@@ -272,6 +299,15 @@ void main() {
             float ping = exp(-fract(t * 7.0) * 6.0);
             col += rec_col * ringLine(r, 0.70 + 0.12 * ping, 0.010, aa) * ping * (0.8 + 1.2 * is_barge);
         }
+    }
+
+    // ---- Tom confirm: green check / red X below the rec pip ----------------
+    if (ada_b.z > 0.5) {
+        float hv = ada_b.w;
+        float lit_yes = step(0.5, hv) * (1.0 - step(1.5, hv));
+        float lit_no  = step(1.5, hv);
+        col += confirmBtn(uv, vec2(0.620, 0.640), 0.0525, vec3(0.30, 1.00, 0.55), 0.0, lit_yes, t);
+        col += confirmBtn(uv, vec2(0.766, 0.640), 0.0525, vec3(1.00, 0.22, 0.28), 1.0, lit_no, t);
     }
 
     // ---- brain lost: dim red, machinery stalled -----------------------------

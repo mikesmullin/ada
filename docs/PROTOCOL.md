@@ -115,15 +115,17 @@ Line-delimited JSON, one object per line:
 
 ```
 back → avatar:  {"ev":"state", "listening":true, "active":false,
-                  "thinking":false, "speaking":false}
+                  "thinking":false, "speaking":false, "confirm":false}
                  {"ev":"caption", "who":"ada"|"tom"|"user", "text":"..."}
                  // who ada|tom|omitted → caption particle; empty text is no-op
                  // each non-empty text spawns a caption particle (stack from
                  // bottom, newest lowest). Solid hold scales with word count
                  // (min 1.5s, max 12s) then 5.25s fade.
                  // empty text is a no-op; particles self-expire.
+                 // confirm=true while Tom is waiting: avatar draws check/X.
 avatar → back:  {"ev":"ptt", "down":true|false}
                  {"ev":"click"}     // short press: cancel / dismiss
+                 {"ev":"confirm", "ok":true|false}  // click check / X
                  {"ev":"quit"}
 ```
 
@@ -137,3 +139,8 @@ pending or speaking turn (whisper-style cancel-before-commit). A real
 hold lasts exactly as long as LMB is down: VAD silence and listen
 start/finish clocks do not commit while the button is held; LMB-up is
 end-of-utterance.
+
+While `confirm` is true, a short press whose down *and* up land on the
+green check or red X (top-right, below the rec pip, same right margin) is *not* PTT/cancel:
+the avatar sends `confirm ok:true` (approve this Tom challenge) or
+`ok:false` (deny this one). Clicks on empty space still cancel.

@@ -31,6 +31,20 @@ waveSeq = 0
 export isWaiting = ->
   waiter? or tomPumpRunning or tomJobQueue.length > 0
 
+# Check/X should show only while a challenge is armed or queued — not while
+# the pump is still running a tool after approve (that was sticking the UI).
+export isConfirmPending = ->
+  Boolean waiter or tomJobQueue.length > 0
+
+# Avatar check/X click: resolve the live challenge the same as speech.
+export decideFromClick = (approved) ->
+  return false unless waiter?
+  finish waiter,
+    approved: Boolean approved
+    reason: if approved then 'click' else 'click-deny'
+    spoken: if approved then '(click approve)' else '(click deny)'
+  true
+
 # Avatar click / cancel: deny active + every remaining queued Tom.
 export denyAllPending = (reason = 'click') ->
   unless isWaiting()
@@ -217,6 +231,7 @@ export tomConfirm = ({
   speakSchedule
   tomIndex
   tomTotal
+  onWaiting
 }) ->
   if tomAbortAll
     return Object.assign {}, tomAbortAll, phrase: null
@@ -227,7 +242,7 @@ export tomConfirm = ({
   if tomTotal? and tomTotal > 1 and tomIndex?
     ord = "Request #{tomIndex} of #{tomTotal}. "
   denyLine = denyPhrases?[0] or 'belay that order'
-  challenge = "Tom here, security. #{ord}#{summary} " +
+  challenge = "#{ord}#{summary} " +
     "To approve, say exactly: #{phrase}. " +
     "To deny, say: #{denyLine}."
 
@@ -289,8 +304,12 @@ export tomConfirm = ({
     log? "tom speak error: #{e.message}"
     null
 
+  try onWaiting?(true)
+  catch e then null
   result = await confirmP
   decided = true
+  try onWaiting?(false)
+  catch e then null
 
   await cutTomAudio()
   speakP.catch(-> null)

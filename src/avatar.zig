@@ -68,6 +68,8 @@ const Targets = struct {
     /// 5 finish-empty, 6 got-utterance, 7 barge-in. ear_remain is 0..1 fuse.
     ear_phase: f32 = 0,
     ear_remain: f32 = 0,
+    /// Tom waiting for approve/deny: shader draws check/X; clicks hit-test.
+    confirm: f32 = 0,
 };
 
 /// Render-thread-only smoothed copies of Targets.
@@ -86,7 +88,24 @@ const Smooth = struct {
     press: f32 = 0,
     ear_phase: f32 = 0,
     ear_remain: f32 = 0,
+    confirm: f32 = 0,
+    confirm_hover: f32 = 0,
 };
+
+/// Keep in sync with confirmBtn() centers in hud.glsl / orb.glsl.
+/// Rec pip is (0.78, 0.78) r=0.038 → right edge 0.818. X shares that edge.
+const CONFIRM_YES = struct {
+    const x: f32 = 0.620;
+    const y: f32 = 0.640;
+};
+const CONFIRM_NO = struct {
+    const x: f32 = 0.766;
+    const y: f32 = 0.640;
+};
+/// Visual radius 0.0525 (50% of first pass); hit radius a bit larger.
+const CONFIRM_HIT_R: f32 = 0.068;
+
+const ConfirmHit = enum { none, yes, no };
 
 const G = struct {
     var alloc: std.mem.Allocator = undefined;
@@ -102,6 +121,10 @@ const G = struct {
     var start_ts: std.Io.Clock.Timestamp = undefined;
     var last_time: f64 = 0;
     var press_started: f64 = -1;
+    var mouse_x: f32 = 0;
+    var mouse_y: f32 = 0;
+    /// .none unless LMB went down on a confirm button (skips PTT).
+    var confirm_press: ConfirmHit = .none;
 
     var bind: sg.Bindings = .{};
     var pip: sg.Pipeline = .{};
@@ -114,6 +137,7 @@ const G = struct {
     var solo_active: bool = false;
     var solo_think: bool = false;
     var solo_speak: bool = false;
+    var solo_confirm: bool = false;
     var solo_pulse: f64 = -10;
     var solo_caption_i: u32 = 0;
 
@@ -344,6 +368,42 @@ fn sendPtt(down: bool) void {
     sendBack(if (down) "{\"ev\":\"ptt\",\"down\":true}" else "{\"ev\":\"ptt\",\"down\":false}");
 }
 
+fn sendConfirm(ok: bool) void {
+    sendBack(if (ok) "{\"ev\":\"confirm\",\"ok\":true}" else "{\"ev\":\"confirm\",\"ok\":false}");
+}
+
+fn mouseUv() [2]f32 {
+    const w = sapp.widthf();
+    const h = sapp.heightf();
+    if (w <= 0 or h <= 0) return .{ 0, 0 };
+    return .{ G.mouse_x / w * 2.0 - 1.0, 1.0 - G.mouse_y / h * 2.0 };
+}
+
+fn inDisc(uv: [2]f32, cx: f32, cy: f32, r: f32) bool {
+    const dx = uv[0] - cx;
+    const dy = uv[1] - cy;
+    return dx * dx + dy * dy <= r * r;
+}
+
+fn hitConfirm(uv: [2]f32, confirm_on: bool) ConfirmHit {
+    if (!confirm_on) return .none;
+    if (inDisc(uv, CONFIRM_YES.x, CONFIRM_YES.y, CONFIRM_HIT_R)) return .yes;
+    if (inDisc(uv, CONFIRM_NO.x, CONFIRM_NO.y, CONFIRM_HIT_R)) return .no;
+    return .none;
+}
+
+fn noteMouse(e: sapp.Event) void {
+    G.mouse_x = e.mouse_x;
+    G.mouse_y = e.mouse_y;
+}
+
+fn confirmVisible() bool {
+    if (G.opts.solo) return G.solo_confirm;
+    G.targets.mu.lockUncancelable(G.io);
+    defer G.targets.mu.unlock(G.io);
+    return G.targets.confirm > 0.5;
+}
+
 const StateMsg = struct {
     ev: []const u8,
     listening: bool = false,
@@ -354,6 +414,7 @@ const StateMsg = struct {
     text: []const u8 = "",
     ear: f64 = 0,
     ear_t: f64 = 0,
+    confirm: bool = false,
 };
 
 fn spawnCaption(text: []const u8) void {
@@ -394,6 +455,7 @@ fn handleBackLine(line: []const u8) void {
     G.targets.speaking = if (msg.speaking) 1 else 0;
     G.targets.ear_phase = @floatCast(msg.ear);
     G.targets.ear_remain = @floatCast(msg.ear_t);
+    G.targets.confirm = if (msg.confirm) 1 else 0;
 }
 
 fn backThread() void {
@@ -450,6 +512,7 @@ fn setConnected(ok: bool) void {
         G.targets.speaking = 0;
         G.targets.ear_phase = 0;
         G.targets.ear_remain = 0;
+        G.targets.confirm = 0;
         // leave caption particles to age out on their own
     }
 }
@@ -627,6 +690,7 @@ export fn frame() void {
         tgt.ada_last_audible = G.targets.ada_last_audible;
         tgt.ear_phase = G.targets.ear_phase;
         tgt.ear_remain = G.targets.ear_remain;
+        tgt.confirm = G.targets.confirm;
     }
 
     // Her actual audio opens the speaking gate (playback truth beats the
@@ -671,6 +735,12 @@ export fn frame() void {
     // Countdown must snap — smoothing would lie about remaining time.
     s.ear_phase = tgt.ear_phase;
     s.ear_remain = tgt.ear_remain;
+    s.confirm = tgt.confirm;
+    s.confirm_hover = switch (hitConfirm(mouseUv(), tgt.confirm > 0.5)) {
+        .none => 0,
+        .yes => 1,
+        .no => 2,
+    };
 
     // idle recedes as any engaged state rises
     const engaged = @max(s.active, @max(s.thinking, s.speaking));
@@ -683,7 +753,7 @@ export fn frame() void {
         .user_a = .{ s.user.rms, s.user.band[0], s.user.band[1], s.user.band[2] },
         .user_b = .{ s.user.band[3], s.user_env, s.user.vad, 0 },
         .ada_a = .{ s.ada.rms, s.ada.band[0], s.ada.band[1], s.ada.band[2] },
-        .ada_b = .{ s.ada.band[3], s.ada_env, 0, 0 },
+        .ada_b = .{ s.ada.band[3], s.ada_env, s.confirm, s.confirm_hover },
     };
 
     const sw = sapp.widthf();
@@ -722,6 +792,7 @@ fn soloDrive(tgt: *Targets, now: f64) void {
     tgt.active = if (G.solo_active) 1 else 0;
     tgt.thinking = if (G.solo_think) 1 else 0;
     tgt.speaking = if (G.solo_speak) 1 else 0;
+    tgt.confirm = if (G.solo_confirm) 1 else 0;
     tgt.connected = 1;
 
     const t: f32 = @floatCast(now);
@@ -752,11 +823,37 @@ fn soloDrive(tgt: *Targets, now: f64) void {
 export fn event(ev: [*c]const sapp.Event) void {
     const e = ev.*;
     switch (e.type) {
+        .MOUSE_MOVE, .MOUSE_ENTER => noteMouse(e),
+        .MOUSE_LEAVE => {
+            G.mouse_x = -1.0e6;
+            G.mouse_y = -1.0e6;
+        },
         .MOUSE_DOWN => if (e.mouse_button == .LEFT) {
+            noteMouse(e);
+            const hit = hitConfirm(mouseUv(), confirmVisible());
+            if (hit != .none) {
+                G.confirm_press = hit;
+                G.press_started = -1;
+                return;
+            }
+            G.confirm_press = .none;
             G.press_started = G.last_time;
             sendPtt(true);
         },
         .MOUSE_UP => if (e.mouse_button == .LEFT) {
+            noteMouse(e);
+            if (G.confirm_press != .none) {
+                const hit = hitConfirm(mouseUv(), confirmVisible());
+                if (hit == G.confirm_press) {
+                    if (G.opts.solo) {
+                        G.solo_confirm = false;
+                    } else {
+                        sendConfirm(hit == .yes);
+                    }
+                }
+                G.confirm_press = .none;
+                return;
+            }
             const held = G.last_time - G.press_started;
             G.press_started = -1;
             sendPtt(false);
@@ -790,6 +887,7 @@ fn soloKey(key: sapp.Keycode) void {
                 spawnCaption("Hello — this is a sample caption.");
             }
         },
+        ._6 => G.solo_confirm = !G.solo_confirm,
         .SPACE => {
             G.solo_pulse = G.last_time;
             G.solo_caption_i +%= 1;
