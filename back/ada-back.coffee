@@ -395,7 +395,6 @@ sfxAwait = (name) ->
 # thought she was silent at TTS enqueue-ACK and fired listen-on too early.
 
 voicePlay =
-  pending: 0
   speaking: false
   eventsLive: false
   suppressEnd: false
@@ -449,7 +448,6 @@ class Speaker
         t0 = performance.now()
         try
           await speakOnce CFG.voice, text, schedule
-          voicePlay.pending++ if text
           turn.lat.lastAudioDone = performance.now() if turn?.lat
           log "spoke [#{schedule}] (#{Math.round performance.now() - t0}ms): #{text}"
         catch e
@@ -485,7 +483,6 @@ speakOnce = (preset, text, schedule = 'enqueue') ->
 # playing/queued speech without saying anything.
 stopSpeech = ->
   voicePlay.suppressEnd = true
-  voicePlay.pending = 0
   voicePlay.speaking = false
   speakOnce(CFG.voice, '', 'interrupt').catch (e) -> log "stop failed: #{e.message}"
 
@@ -859,9 +856,7 @@ connectPresenceEvents = (isRetry = false) ->
         voicePlay.speaking = true
       else if msg.ev is 'speak-end'
         voicePlay.eventsLive = true
-        voicePlay.speaking = false
-        unless voicePlay.suppressEnd
-          voicePlay.pending = Math.max 0, voicePlay.pending - 1
+        voicePlay.speaking = false unless voicePlay.suppressEnd
   sock.on 'error', (e) ->
     log "presence events: #{e.message}" unless isRetry
   sock.on 'close', ->
@@ -879,8 +874,11 @@ connectPresenceEvents = (isRetry = false) ->
 
 sleep = (ms) -> new Promise (r) -> setTimeout r, ms
 
+# Pump still sending TTS, or presence-voice still playing. Do not use
+# voicePlay.pending here: a missed speak-end leaves pending > 0 forever
+# and the listen-on chime never fires.
 isVocalizing = ->
-  speaker.busy() or voicePlay.pending > 0 or voicePlay.speaking
+  speaker.busy() or voicePlay.speaking
 
 settleEar = (job, result) ->
   return if job.settled
@@ -888,14 +886,20 @@ settleEar = (job, result) ->
   for w in job.waiters or []
     w.resolve result
 
+# Quiet = not pumping and not playing, stable for QUIET_MS (covers the
+# enqueue-ACK → speak-start gap and tiny gaps between FIFO sentences).
+QUIET_MS = 180
 waitVocalization = (epoch) ->
   turnSplitter?.flush()
+  quietSince = null
   loop
     return false if epoch isnt listenEpoch
-    unless isVocalizing()
-      await sleep 80
-      return false if epoch isnt listenEpoch
-      return true unless isVocalizing()
+    if isVocalizing()
+      quietSince = null
+    else
+      quietSince ?= Date.now()
+      if Date.now() - quietSince >= QUIET_MS
+        return true
     await sleep 40
 
 # Stream reducer: at most one ear job. A new request joins the live or
