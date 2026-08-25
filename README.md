@@ -39,10 +39,11 @@ ada avatar --solo                # no services: 1-5 toggle states, space pulse
 Orb input: **hold left button = push-to-talk** (talk until you release —
 no max hold), short click = cancel
 listen if she is actively listening (wake-word gathering or `listen`
-tool), otherwise cancel speech / the turn. `esc` quit (`q` only in
-`--solo` — a letter key would close the orb under voice-keyboard STT).
-Voice activation: say "Ada …" (transcript matching). She does not keep
-listening after she answers unless she calls the `listen` tool.
+tool), otherwise cancel speech / the turn. The avatar ignores the
+keyboard in production (voice-keyboard STT was closing it); `q`/`esc`
+quit only in `--solo`. Voice activation: say "Ada …" (transcript
+matching). She does not keep listening after she answers unless she
+calls the `listen` tool.
 
 ## Install
 

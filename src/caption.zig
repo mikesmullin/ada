@@ -22,11 +22,11 @@ pub const TEXT_CAP = 256;
 pub const MAX = 16;
 
 /// Solid hold = clamp(BASE + PER_WORD * n_words, MIN, MAX), then FADE seconds of decay.
-pub const SOLID_BASE_S: f32 = 0.75;
-pub const SOLID_PER_WORD_S: f32 = 0.30; // ~200 wpm reading allowance
-pub const SOLID_MIN_S: f32 = 1.0;
-pub const SOLID_MAX_S: f32 = 8.0;
-pub const FADE_S: f32 = 3.5;
+pub const SOLID_BASE_S: f32 = 1.125;
+pub const SOLID_PER_WORD_S: f32 = 0.45; // ~133 wpm reading allowance
+pub const SOLID_MIN_S: f32 = 1.5;
+pub const SOLID_MAX_S: f32 = 12.0;
+pub const FADE_S: f32 = 5.25;
 
 const Particle = struct {
     /// Seconds from avatar start clock; 0 = dead (Game9 `born_at == 0`).

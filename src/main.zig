@@ -39,6 +39,7 @@ const HELP =
     \\  --presence-sock PATH     default /tmp/presence-voice.sock
     \\
     \\orb input: hold left button = push-to-talk; short click = cancel.
+    \\The production avatar ignores the keyboard.
     \\
 ;
 

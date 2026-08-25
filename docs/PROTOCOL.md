@@ -119,7 +119,8 @@ back → avatar:  {"ev":"state", "listening":true, "active":false,
                  {"ev":"caption", "who":"ada"|"tom"|"user", "text":"..."}
                  // who ada|tom|omitted → caption particle; empty text is no-op
                  // each non-empty text spawns a caption particle (stack from
-                 // bottom, newest lowest). 1s solid then fade out by 5s.
+                 // bottom, newest lowest). Solid hold scales with word count
+                 // (min 1.5s, max 12s) then 5.25s fade.
                  // empty text is a no-op; particles self-expire.
 avatar → back:  {"ev":"ptt", "down":true|false}
                  {"ev":"click"}     // short press: cancel / dismiss

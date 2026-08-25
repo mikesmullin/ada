@@ -83,53 +83,48 @@ export connectLevels = (sockPath, onFrame, log = ->) ->
     setTimeout (-> connectLevels sockPath, onFrame, log), 1000
   sock
 
-# Mutable listen/gather buffer with pause-newlines.
+# Mutable listen/gather/PTT buffer.
+# Committed lines stay put. lastPartial is only the live in-progress line
+# (one VAD segment). A new Whisper hypothesis replaces that line, never
+# the prefix — otherwise a PTT hold of several sentences kept only the last.
 export createTranscriptBuf = ->
   text: ''
   lastWordAt: Date.now()
   lastPartial: ''
 
+committedPrefix = (buf) ->
+  lp = buf.lastPartial or ''
+  return buf.text unless lp
+  if buf.text.endsWith lp then buf.text.slice 0, buf.text.length - lp.length else buf.text
+
+commitLine = (buf) ->
+  unless buf.text.endsWith '\n'
+    buf.text += '\n' if buf.text
+  buf.lastPartial = ''
+
 export feedPartial = (buf, partial, speaking) ->
   t = String(partial or '').trim()
   now = Date.now()
   if t and t isnt buf.lastPartial
-    # grow committed prefix when the partial extends
-    if t.startsWith buf.lastPartial
-      extra = t.slice buf.lastPartial.length
-      buf.text += extra
-    else if not buf.text or t.length >= buf.lastPartial.length
-      # replacement hypothesis — keep pause-newlines already in buf.text if any
-      nl = (buf.text.match(/\n+$/) or [''])[0]
-      buf.text = t + nl
+    buf.text = committedPrefix(buf) + t
     buf.lastPartial = t
     buf.lastWordAt = now
   else if not speaking and buf.text and (now - buf.lastWordAt) >= PAUSE_NL_MS
-    unless buf.text.endsWith '\n'
-      buf.text += '\n'
-      buf.lastWordAt = now
+    commitLine buf
+    buf.lastWordAt = now
   buf
 
 export feedUtterance = (buf, text) ->
   t = String(text or '').trim()
   return buf unless t
-  # Prefer the finalized utterance over partials, keep trailing pause newlines.
-  nl = (buf.text.match(/\n+$/) or [''])[0]
-  # If we already accumulated pause-split lines, append this as the last line
-  # when the utterance contains the last partial; else replace.
-  if buf.text and buf.lastPartial and t.toLowerCase().includes(buf.lastPartial.trim().toLowerCase().slice(0, 40))
-    # rebuild from finalized but restore extra newlines we inserted
-    linesHint = buf.text.split('\n').length
-    buf.text = t + nl
-    if linesHint > 1 and not t.includes('\n')
-      # keep at least the trailing pause break
-      buf.text = t + nl
-  else if buf.text and buf.text.replace(/\n/g, ' ').trim() and t
-    unless buf.text.endsWith '\n'
-      buf.text += '\n'
-    buf.text += t
+  prefix = committedPrefix buf
+  if buf.lastPartial or not prefix.replace(/\n/g, ' ').trim()
+    buf.text = prefix + t
   else
-    buf.text = t + nl
-  buf.lastPartial = t
+    buf.text = prefix
+    buf.text += '\n' unless buf.text.endsWith '\n'
+    buf.text += t
+  commitLine buf
   buf.lastWordAt = Date.now()
   buf
 

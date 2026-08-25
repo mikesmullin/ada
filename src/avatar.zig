@@ -762,54 +762,47 @@ export fn event(ev: [*c]const sapp.Event) void {
             sendPtt(false);
             if (held < 0.25) sendBack("{\"ev\":\"click\"}"); // cancel/dismiss
         },
-        .KEY_DOWN => switch (e.key_code) {
-            // Escape always quits. Q is --solo only: a letter key in
-            // production closes the orb whenever STT/voice-keyboard (or
-            // any focused typing) emits q — "question", "quite", etc.
-            .ESCAPE => {
-                sendBack("{\"ev\":\"quit\"}");
-                sapp.requestQuit();
-            },
-            .Q => if (G.opts.solo) {
-                sendBack("{\"ev\":\"quit\"}");
-                sapp.requestQuit();
-            },
-            ._1 => if (G.opts.solo) {
-                G.solo_active = false;
-                G.solo_think = false;
-                G.solo_speak = false;
-            },
-            ._2 => if (G.opts.solo) {
-                G.solo_listen = !G.solo_listen;
-            },
-            ._3 => if (G.opts.solo) {
-                G.solo_active = !G.solo_active;
-            },
-            ._4 => if (G.opts.solo) {
-                G.solo_think = !G.solo_think;
-            },
-            ._5 => if (G.opts.solo) {
-                G.solo_speak = !G.solo_speak;
-                if (G.solo_speak) {
-                    spawnCaption("Hello — this is a sample caption.");
-                }
-            },
-            .SPACE => if (G.opts.solo) {
-                G.solo_pulse = G.last_time;
-                // Spawn another caption to demo stacking / fade.
-                G.solo_caption_i +%= 1;
-                var buf: [64]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "Caption particle #{d}", .{G.solo_caption_i}) catch "Caption particle";
-                spawnCaption(msg);
-            },
-            else => {},
+        // Production ignores the keyboard entirely: mouse PTT/click is the
+        // only input. Voice-keyboard STT was emitting q/esc/combos into the
+        // focused orb and quitting it. --solo keeps keys for shader review.
+        .KEY_DOWN => if (G.opts.solo) soloKey(e.key_code),
+        else => {},
+    }
+}
+
+fn soloKey(key: sapp.Keycode) void {
+    switch (key) {
+        .ESCAPE, .Q => {
+            sendBack("{\"ev\":\"quit\"}");
+            sapp.requestQuit();
+        },
+        ._1 => {
+            G.solo_active = false;
+            G.solo_think = false;
+            G.solo_speak = false;
+        },
+        ._2 => G.solo_listen = !G.solo_listen,
+        ._3 => G.solo_active = !G.solo_active,
+        ._4 => G.solo_think = !G.solo_think,
+        ._5 => {
+            G.solo_speak = !G.solo_speak;
+            if (G.solo_speak) {
+                spawnCaption("Hello — this is a sample caption.");
+            }
+        },
+        .SPACE => {
+            G.solo_pulse = G.last_time;
+            G.solo_caption_i +%= 1;
+            var buf: [64]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "Caption particle #{d}", .{G.solo_caption_i}) catch "Caption particle";
+            spawnCaption(msg);
         },
         else => {},
     }
 }
 
 export fn cleanup() void {
-    // Window close / normal sokol teardown (titlebar X, esc quit path).
+    // Window close / normal sokol teardown (titlebar X, --solo q/esc).
     releaseInstanceLock();
     if (G.font.ok) G.font.deinit();
     sg.shutdown();
