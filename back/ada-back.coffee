@@ -252,10 +252,13 @@ startAvatarServer = ->
 # PTT + activation gate (no conversation window — listen tool instead)
 
 pttDown = false
+pttDownAt = 0
 pttIntervals = [] # {down, up} unix seconds, recent only
-pttSquelchTimer = null
 PTT_HOLD_MS = 250 # must match avatar short-click threshold
 pttBuf = createTranscriptBuf()
+# Exclusive paplay slot for the walkie-talkie pair (squelch-on / click-off).
+# Playing one kills the other so a short click cuts squelch mid-playback.
+pttSfxChild = null
 listenSession = null
 listenEpoch = 0
 earJobs = []
@@ -303,33 +306,29 @@ onAvatarEvent = (ev) ->
       now = Date.now() / 1000
       if ev.down and not pttDown
         pttDown = true
+        pttDownAt = Date.now()
         pttBuf = createTranscriptBuf()
         pttIntervals.push { down: now, up: null }
         setState active: true
         listenSession?.setHeld true
-        # Delay listen-on until this is a real hold. A short click also sends
-        # ptt down/up; playing squelch here made cancel play both sfx.
-        clearTimeout pttSquelchTimer if pttSquelchTimer
-        pttSquelchTimer = setTimeout ->
-          pttSquelchTimer = null
-          if pttDown
-            sfx 'squelch-on'
-            setEar 1
-        , PTT_HOLD_MS
+        # Arm immediately. Click vs hold is classified on LMB-up; a short
+        # press still plays squelch, then click-off interrupts it.
+        sfxPtt 'squelch-on'
+        setEar 1
       else if not ev.down and pttDown
-        held = pttSquelchTimer is null
-        clearTimeout pttSquelchTimer if pttSquelchTimer
-        pttSquelchTimer = null
+        held = (Date.now() - pttDownAt) >= PTT_HOLD_MS
         pttDown = false
         pttIntervals.at(-1).up = now
         pttIntervals.shift() while pttIntervals.length > 8
         listenSession?.setHeld false
-        # Hold release: listen-off. Short click: click handler plays it once.
-        sfx 'click-off' if held
+        # Same channel as squelch-on: kills it if still playing.
+        sfxPtt 'click-off'
         text = snapshotText pttBuf
         pttBuf = createTranscriptBuf()
         # Walkie-talkie: LMB-up is end-of-utterance. Do not let VAD or
         # listen start/finish clocks commit while the button is down.
+        # Sub-threshold release is not a hold — the following `click`
+        # event (from the avatar) is the cancel.
         if held and listenSession?
           had = Boolean snapshotText listenSession.buf
           listenSession.commit()
@@ -341,17 +340,16 @@ onAvatarEvent = (ev) ->
         else
           maybeIdle()
     when 'click'
+      # Sfx already played on PTT-up (click-off interrupts squelch).
       if listenSession?
         log 'click: cancel listen'
         listenSession.cancel 'click'
-        sfx 'click-off'
       else if gathering
         log 'click: cancel wake gathering'
         gatherCancelled = true
         gathering = false
         setEar 0
         setState active: false
-        sfx 'click-off'
       else
         cancelAll 'click'
     when 'say'
@@ -393,6 +391,18 @@ maybeIdle = syncActive
 sfx = (name) ->
   path = "#{CFG.sfxDir}#{name}.wav"
   spawn 'paplay', [path] if existsSync path # fire and forget
+
+# Walkie-talkie layer: squelch-on and click-off replace each other.
+sfxPtt = (name) ->
+  path = "#{CFG.sfxDir}#{name}.wav"
+  return unless existsSync path
+  prev = pttSfxChild
+  pttSfxChild = null
+  prev?.kill 'SIGKILL'
+  child = spawn 'paplay', [path]
+  pttSfxChild = child
+  done = -> pttSfxChild = null if pttSfxChild is child
+  child.promise.then done, done
 
 sfxAwait = (name) ->
   path = "#{CFG.sfxDir}#{name}.wav"
@@ -667,7 +677,7 @@ cancelAll = (reason) ->
     currentTurn = null
   speaker.clear()
   stopSpeech() # silence anything already playing, whisper-style cancel
-  sfx 'click-off'
+  # click-off already played on PTT-up (same gesture). Do not restart it.
   try
     adaSession?.abort reason
   catch e then null

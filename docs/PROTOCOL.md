@@ -129,8 +129,11 @@ avatar → back:  {"ev":"ptt", "down":true|false}
 
 Press-and-hold semantics: the avatar sends `ptt down:true` on left-button
 press immediately (latency), `down:false` on release; if the hold was
-shorter than 250 ms it also sends `click` — the back treats a sub-250 ms
-PTT window with no speech as a no-op, and `click` cancels any pending or
-speaking turn (whisper-style cancel-before-commit). A real hold lasts
-exactly as long as LMB is down: VAD silence and listen start/finish
-clocks do not commit while the button is held; LMB-up is end-of-utterance.
+shorter than 250 ms it also sends `click`. Squelch-on and the ear pip arm
+on down with no delay. Click-off on up shares that sfx channel and kills
+squelch if it is still playing. Hold vs cancel is classified on release:
+a sub-250 ms window does not commit speech, and `click` cancels any
+pending or speaking turn (whisper-style cancel-before-commit). A real
+hold lasts exactly as long as LMB is down: VAD silence and listen
+start/finish clocks do not commit while the button is held; LMB-up is
+end-of-utterance.

@@ -1,11 +1,12 @@
-# Active-listen waiter: VAD-gated start timeout + silence debounce + pause-newlines.
+# Active-listen waiter: start timeout + silence debounce + pause-newlines.
 # Mic energy from perception-voice FeatureFrames (same stream the avatar shaders use).
 import net from 'node:net'
 
 FRAME_SIZE = 36
 MAGIC = 0x31465641
-FLAG_VAD = 1
-RMS_FLOOR = 0.02
+# Calibrated: normal speaking holds the finish fuse; whisper / room noise do not.
+# (tmp/calibrate-gain.js — compressed 0..1 RMS, same units Ada compares.)
+RMS_FLOOR = 0.545
 PAUSE_NL_MS = 1000
 export SILENCE_MS = 3000
 export DEFAULT_START_MS = 6000
@@ -23,7 +24,7 @@ export parseFeatureFrame = (buf, offset = 0) ->
 
 speakingFromFrame = (f) ->
   return false unless f
-  Boolean(f.flags & FLAG_VAD) or (Number(f.rms) or 0) > RMS_FLOOR
+  (Number(f.rms) or 0) > RMS_FLOOR
 
 frameJson = (obj) ->
   payload = Buffer.from JSON.stringify(obj), 'utf8'
@@ -134,7 +135,7 @@ export snapshotText = (buf) ->
 # One in-flight listen session.
 # The ear opens immediately. Start-timeout only after releaseStartClock()
 # (Ada finished vocalizing). Finish-timeout is armed only when the STT
-# buffer grows — VAD/gain does not open it. Once armed, live mic energy
+# buffer grows — gain does not open it. Once armed, RMS above RMS_FLOOR
 # holds the silence debounce so Whisper lag cannot end the turn mid-speech.
 export createListenSession = ({ timeoutSec, onStart, onEnd, onTick, log } = {}) ->
   startMs = Math.max 500, Math.round((Number(timeoutSec) or DEFAULT_START_MS / 1000) * 1000) or DEFAULT_START_MS
