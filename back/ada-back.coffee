@@ -2,8 +2,8 @@
 # ada-back — the persistent conversation loop (docs/PLAN.md §6).
 #
 # Pipeline: perception-voice `subscribe words` (partials + utterances)
-#   → activation gate (PTT overlap / wake word / conversation window)
-#   → agl agent turn (lm-studio, token streaming)
+#   → activation gate (PTT overlap / wake word) or listen-tool waiter
+#   → Angela session.run (agl retain_history + jsonl)
 #   → sentence splitter → presence-voice speak, sentence by sentence
 #   → state events to the avatar at every transition.
 #
@@ -14,23 +14,17 @@
 # bun-coffeescript/register so Bun executes .coffee natively.
 
 import Agent from 'agl-ai'
+import { Angela } from 'angela'
 import yaml from 'js-yaml'
 import net from 'node:net'
-import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'fs'
+import { dirname, join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { spawn } from './lib/spawn.coffee'
-import { clamp, forceInt } from './lib/validate.coffee'
+import { initBrowserAgent } from './ada-browser.coffee'
+import { ensureBrainMcp, resolveAdaBrain } from './lib/mcp-brain.coffee'
+import { ensureTodoMcp } from './lib/mcp-todo.coffee'
 import {
-  alarm__create, alarm__list, alarm__update, alarm__delete
-  alarm__show, alarm__snooze
-  timer__create, timer__dismiss, timer__show
-} from '/workspace/agl-common/lib/tool/adb.coffee'
-import { desk_light, pc_light_color } from '/workspace/agl-common/lib/tool/home.coffee'
-import { initBrowserAgent, runBrowserAgent } from './ada-browser.coffee'
-import { ensureBrainMcp, registerBrainTools, resolveAdaBrain } from './lib/mcp-brain.coffee'
-import { ensureTodoMcp, registerTodoTools } from './lib/mcp-todo.coffee'
-import { checkToolGate } from './lib/tool-gate.coffee'
-import {
-  joinToolWave, registerToolWaveGate, runTomInWave, waitWaveThenRun
+  joinToolWave, registerToolWaveGate, runTomInWave
   feedUtterance as tomFeedUtterance, isWaiting as tomIsWaiting
   denyAllPending as tomDenyAllPending
 } from './lib/tom.coffee'
@@ -40,81 +34,33 @@ import {
 } from './lib/progress.coffee'
 import { announceTool } from './lib/tool-announce.coffee'
 import {
-  loadHistory, rewriteMessages, compactAndPersist, stampNow, defaultPath as ctxLogDefaultPath
-} from './lib/ctx-log.coffee'
+  connectLevels, createListenSession, createTranscriptBuf
+  feedPartial, feedUtterance as gatherFeedUtterance, snapshotText
+} from './lib/listen.coffee'
+import { compactContextWindow } from './lib/compact.coffee'
 
-# PLAN2 W3–M5: allowlist + risk + Tom + progress ticker for long tools.
-# Parallel tools share a wave: Tom confirms serially; no tool body runs until
-# every Tom decision in the wave is done (approve/deny per call).
-wrapToolsWithGateAndLogging = (agent) ->
+# UX wrap only (announce caption + long-tool progress). Allowlist + Tom live
+# in Angela PolicyEngine (onApproval).
+wrapToolsForUx = (agent) ->
   for name in Object.keys agent.tools
     do (name) ->
       fn = agent.tools[name]
       wrapped = (ctx, args) ->
-        # Sync join so Promise.all siblings share one wave before any await.
-        wave = joinToolWave()
         argPreview = try JSON.stringify(args ? {}).slice(0, 240) catch e then String(args)
-        registered = false
-        needsTom = false
+        log "tool → #{name} #{argPreview}"
         try
-          # Yield once so every parallel tool has joined the wave.
-          await Promise.resolve()
-
-          gate = checkToolGate
-            toolName: name
-            args: args
-            allowlistPath: CFG.allowlistPath
-            configRisk: CFG.toolRisk
-            confirmEnabled: CFG.confirmEnabled
-
-          needsTom = (not gate.ok) and gate.needsTom and CFG.confirmEnabled
-          registerToolWaveGate wave, needsTom
-          registered = true
-
-          unless gate.ok
-            if needsTom
-              log "tool ? #{name} [#{gate.risk}] needs Tom (queued) #{argPreview}"
-              setState active: true
-              # Pause Ada speech before this Tom session owns voice + captions.
-              speaker.clear()
-              stopSpeech()
-              tom = await runTomInWave wave,
+          # listen arms immediately — announce would delay the waiter (~2s)
+          # and drop speech as (unaddressed). Caption is `(listening)`.
+          unless name is 'listen'
+            try
+              line = await announceTool
                 toolName: name
                 args: args
-                risk: gate.risk
-                speakOnce: speakOnce
-                stopSpeech: stopSpeech
-                broadcast: broadcast
-                voiceTom: CFG.voiceTom
-                denyPhrases: CFG.denyPhrases
-                timeoutMs: CFG.confirmTimeoutMs
+                model: CFG.model
                 log: log
-              unless tom.approved
-                log "tool ✗ #{name} Tom #{tom.reason}"
-                return "Tom denied the action (#{tom.reason}). Do not invent success. " +
-                  "Briefly tell Mike the action did not run; do not repeat Tom's passphrase."
-              log "tool → #{name} [#{gate.risk}] Tom approved #{argPreview}"
-            else
-              # Hard deny (confirm off / not allowlisted without Tom path).
-              await waitWaveThenRun wave
-              log "tool ✗ #{name} blocked risk=#{gate.risk} #{argPreview}"
-              return gate.message
-          else
-            # Low-risk: wait for any Tom siblings in this wave before running.
-            await waitWaveThenRun wave
-            log "tool → #{name} [#{gate.risk}] #{argPreview}"
-
-          # Pre-tool status: caption only, never TTS. Conversation stays
-          # natural to the ear; the last caption shows which tool she hung on.
-          try
-            line = await announceTool
-              toolName: name
-              args: args
-              model: CFG.model
-              log: log
-            speaker.caption line if line
-          catch e
-            log "announce error: #{e.message}"
+              speaker.caption line if line
+            catch e
+              log "announce error: #{e.message}"
 
           # Long tools: progress ticks + cancel phrase (PLAN2 M5).
           useProgress = isLongTool name, CFG.progressTools
@@ -161,12 +107,6 @@ wrapToolsWithGateAndLogging = (agent) ->
             throw e
           finally
             progress?.stop()
-        finally
-          # If we crashed before registering, do not leave the wave stuck.
-          unless registered
-            try
-              registerToolWaveGate wave, false
-            catch e then null
       wrapped._name = fn._name
       wrapped._description = fn._description
       wrapped._properties = fn._properties
@@ -231,14 +171,11 @@ CFG =
   voice: process.env.ADA_VOICE or config.voice or 'ada'
   model: process.env.ADA_MODEL or process.env.FAV_LOCAL_LLM
   wake: new RegExp(process.env.ADA_WAKE or '\\bada\\b', 'i')
-  convWindowMs: Number(process.env.ADA_CONV_WINDOW_MS or 8000)
   activityDir: process.env.ADA_ACTIVITY_DIR or '/workspace/mari/activity'
   sfxDir: new URL('../sfx/', import.meta.url).pathname
-  # Soft cap on recent turns kept for prompt context (token compaction may drop more).
-  historyMax: Number(process.env.ADA_HISTORY_MAX or config.history_max or 48)
-  # Persistent context-window YAML (gl1-style messages; survives ada-back restart).
-  ctxLogPath: process.env.ADA_CTX_LOG or config.context?.log or
-    ctxLogDefaultPath(ADA_ROOT)
+  voiceSock: process.env.ADA_VOICE_SOCK or
+    "#{process.env.XDG_RUNTIME_DIR or '/tmp'}/ada-voice.sock"
+  sessionFile: process.env.ADA_SESSION_FILE or "#{ADA_ROOT}/.angela/ada-session"
   brainPath: ADA_BRAIN.root
   brainCwd: ADA_BRAIN.cwd
   brainAlias: ADA_BRAIN.alias or 'ada'
@@ -246,8 +183,6 @@ CFG =
     config.task_lists?.shared or '/workspace/Biz/EM/Agent/ada-shared.task.md'
   allowlistPath: process.env.ADA_ALLOWLIST or config.allowlist_file or
     "#{ADA_ROOT}/allowlist.txt"
-  toolRisk: config.tool_risk or {}
-  # M4 Tom: when true, not-allowlisted OR medium/high → spoken confirm (michael).
   confirmEnabled: if process.env.ADA_CONFIRM_ENABLED?
       process.env.ADA_CONFIRM_ENABLED in ['1', 'true', 'yes']
     else if config.confirm?.enabled is false
@@ -263,18 +198,18 @@ CFG =
   progressCancelPrefix: process.env.ADA_PROGRESS_CANCEL or
     config.progress?.cancel_prefix or 'cancel that tool'
   progressTools: config.progress?.tools or []
-  # Gemma-4 ~120K budget; reserve room for tools + completion (PLAN2 W7).
-  contextMaxTokens: Number(process.env.ADA_CONTEXT_MAX_TOKENS or
-    config.context?.max_tokens or 120000)
   contextReserveTokens: Number(process.env.ADA_CONTEXT_RESERVE_TOKENS or
     config.context?.compact_reserve_tokens or 8000)
+  listenStartSec: Number(process.env.ADA_LISTEN_TIMEOUT or 6)
+  slopSec: 0.3
+  maxTurns: Math.max 1, Number(process.env.ADA_MAX_TURNS or config.max_turns or 20) or 20
 
 log = (a...) -> console.log "[#{new Date().toISOString().slice 11, 23}]", a...
 
 # ---------------------------------------------------------------------------
 # State machine + avatar socket server (JSON lines)
 
-state = { listening: false, active: false, thinking: false, speaking: false }
+state = { listening: false, active: false, thinking: false, speaking: false, ear: 0, ear_t: 0 }
 avatars = new Set()
 
 broadcast = (obj) ->
@@ -314,11 +249,52 @@ startAvatarServer = ->
   log "avatar server listening on unix://#{CFG.backSock}"
 
 # ---------------------------------------------------------------------------
-# PTT + activation gate
+# PTT + activation gate (no conversation window — listen tool instead)
 
 pttDown = false
 pttIntervals = [] # {down, up} unix seconds, recent only
-convWindowUntil = 0
+pttSquelchTimer = null
+PTT_HOLD_MS = 250 # must match avatar short-click threshold
+listenSession = null
+listenEpoch = 0
+earJobs = []
+earPumping = false
+gathering = false
+gatherCancelled = false
+gatherBuf = createTranscriptBuf()
+lastUnaddressed = null
+micSpeaking = false
+adaHarness = null
+adaSession = null
+
+isActivelyListening = ->
+  Boolean pttDown or listenSession? or gathering or earJobs.some (j) -> not j.cancelled
+
+# Shader rec/fuse:
+#   0 off
+#   1 armed (ear open, no clock — Ada may still be talking)
+#   2 start-timeout running
+#   3 start-timeout ended empty
+#   4 finish-timeout running
+#   5 finish-timeout ended empty
+#   6 got utterance (she was already quiet)
+#   7 barge-in interrupt (she was still talking)
+setEar = (phase, remain = 0, total = 0) ->
+  frac = 0
+  if phase > 0
+    frac = if total > 0 then Math.max(0, Math.min(1, remain / total)) else 1
+  frac = Math.round(frac * 50) / 50
+  setState ear: phase, ear_t: frac
+
+earFlashUntil = 0
+flashEar = (phase, ms = 480) ->
+  setEar phase
+  deadline = Date.now() + ms
+  earFlashUntil = deadline
+  setTimeout ->
+    return unless earFlashUntil is deadline
+    setEar 0 unless listenSession? or pttDown or gathering
+  , ms
 
 onAvatarEvent = (ev) ->
   switch ev.ev
@@ -327,23 +303,42 @@ onAvatarEvent = (ev) ->
       if ev.down and not pttDown
         pttDown = true
         pttIntervals.push { down: now, up: null }
-        sfx 'squelch-on'
         setState active: true
+        # Delay listen-on until this is a real hold. A short click also sends
+        # ptt down/up; playing squelch here made cancel play both sfx.
+        clearTimeout pttSquelchTimer if pttSquelchTimer
+        pttSquelchTimer = setTimeout ->
+          pttSquelchTimer = null
+          if pttDown
+            sfx 'squelch-on'
+            setEar 1
+        , PTT_HOLD_MS
       else if not ev.down and pttDown
+        held = pttSquelchTimer is null
+        clearTimeout pttSquelchTimer if pttSquelchTimer
+        pttSquelchTimer = null
         pttDown = false
         pttIntervals.at(-1).up = now
         pttIntervals.shift() while pttIntervals.length > 8
-        sfx 'click-off'
+        # Hold release: listen-off. Short click: click handler plays it once.
+        sfx 'click-off' if held
         maybeIdle()
     when 'click'
-      cancelAll 'click'
+      if listenSession?
+        log 'click: cancel listen'
+        listenSession.cancel 'click'
+        sfx 'click-off'
+      else if gathering
+        log 'click: cancel wake gathering'
+        gatherCancelled = true
+        gathering = false
+        setEar 0
+        setState active: false
+        sfx 'click-off'
+      else
+        cancelAll 'click'
     when 'say'
-      # External clients (`ada voice <text>`): speak through the normal
-      # pipeline — per-sentence avatar captions + speaking state, Ada's
-      # configured voice. First sentence interrupts anything mid-flight.
-      # turn=null marks this as TTS-only: do NOT arm the post-speech
-      # conversation window (activationGate 'window') — brain viz / CLI
-      # just want speak + captions, not follow-up STT without a wake word.
+      # External clients (`ada voice <text>`): TTS + captions only.
       text = String(ev.text or '').trim()
       if text
         log "say (external): #{text.slice(0, 120)}"
@@ -353,22 +348,27 @@ onAvatarEvent = (ev) ->
     when 'quit'
       log 'avatar quit'
 
-# An utterance passes if PTT overlapped its time window, it names Ada, or
-# it falls inside the post-exchange conversation window (plan §6.2).
 activationGate = (utt) ->
-  SLOP = 0.3 # seconds — VAD tails and clock slop
+  SLOP = CFG.slopSec
   return 'ptt' if pttDown
   if utt.t_start and utt.t_end
     for iv in pttIntervals
       up = iv.up ? Date.now() / 1000
       return 'ptt' if iv.down <= utt.t_end + SLOP and up >= utt.t_start - SLOP
   return 'wake' if CFG.wake.test utt.text
-  return 'window' if Date.now() < convWindowUntil
   null
 
-maybeIdle = ->
-  if not currentTurn and not pttDown and Date.now() >= convWindowUntil
-    setState active: false
+# `active` is only PTT-hold / listen-tool / wake-gather — never leftover
+# thinking. PTT-up used to skip clearing while currentTurn was set, so the
+# orb stayed "engaged" through a long completion and looked like listening.
+syncActive = ->
+  engaged = pttDown or listenSession? or gathering
+  setState active: engaged
+  unless engaged or Date.now() < earFlashUntil or
+      earJobs.some (j) -> j.started and not j.cancelled
+    setEar 0
+
+maybeIdle = syncActive
 
 # ---------------------------------------------------------------------------
 # sfx feedback (borrowed from /workspace/whisper's proven set)
@@ -377,9 +377,28 @@ sfx = (name) ->
   path = "#{CFG.sfxDir}#{name}.wav"
   spawn 'paplay', [path] if existsSync path # fire and forget
 
+sfxAwait = (name) ->
+  path = "#{CFG.sfxDir}#{name}.wav"
+  return unless existsSync path
+  child = spawn 'paplay', [path]
+  try
+    await child.promise
+  catch e then log "sfx #{name}: #{e.message}"
+
 # ---------------------------------------------------------------------------
 # presence-voice speaker: one in-flight request at a time serializes our
 # sentence queue; the daemon's FIFO speech channel makes them gapless.
+#
+# Playback tracking lives on this object (not bare vars) so CoffeeScript
+# closures mutate the same state — bare `playbackPending = 0` inside
+# stopSpeech/event handlers compiled to shadowed locals, so the ear
+# thought she was silent at TTS enqueue-ACK and fired listen-on too early.
+
+voicePlay =
+  pending: 0
+  speaking: false
+  eventsLive: false
+  suppressEnd: false
 
 class Speaker
   constructor: ->
@@ -399,8 +418,15 @@ class Speaker
   # so the avatar shows the last call without interrupting the conversation.
   caption: (text, who = 'ada') ->
     clean = String(text or '').replace(/[\t\n]+/g, ' ').trim()
-    return unless clean
     broadcast { ev: 'caption', who, text: clean }
+
+  busy: -> @pumping or @queue.length > 0
+
+  waitIdle: ->
+    new Promise (resolve) =>
+      tick = =>
+        if @busy() then setTimeout tick, 40 else resolve()
+      tick()
 
   clear: ->
     @queue.length = 0
@@ -423,6 +449,7 @@ class Speaker
         t0 = performance.now()
         try
           await speakOnce CFG.voice, text, schedule
+          voicePlay.pending++ if text
           turn.lat.lastAudioDone = performance.now() if turn?.lat
           log "spoke [#{schedule}] (#{Math.round performance.now() - t0}ms): #{text}"
         catch e
@@ -430,15 +457,8 @@ class Speaker
     finally
       @pumping = false
       setState speaking: false
-      # Clear caption after the queue drains (avatar lingers briefly for readability).
       broadcast { ev: 'caption', who: 'ada', text: '' } unless @queue.length
-      # Arm post-exchange active listening only after dialogue turns.
-      # LLM turns often clear currentTurn before audio finishes; re-arm here so
-      # the window starts when she stops speaking. External say (turn=null) must
-      # NOT arm the window — otherwise ambient speech is treated as a follow-up.
-      if not currentTurn and spokeForDialogue
-        convWindowUntil = Date.now() + CFG.convWindowMs
-        setTimeout maybeIdle, CFG.convWindowMs + 50
+      maybeIdle() unless listenSession or gathering or pttDown
 
 speakOnce = (preset, text, schedule = 'enqueue') ->
   new Promise (resolve, reject) ->
@@ -464,6 +484,9 @@ speakOnce = (preset, text, schedule = 'enqueue') ->
 # The daemon's stop primitive: interrupt with empty text silences any
 # playing/queued speech without saying anything.
 stopSpeech = ->
+  voicePlay.suppressEnd = true
+  voicePlay.pending = 0
+  voicePlay.speaking = false
   speakOnce(CFG.voice, '', 'interrupt').catch (e) -> log "stop failed: #{e.message}"
 
 speaker = new Speaker()
@@ -490,185 +513,8 @@ class SentenceSplitter
     @onSentence rest if rest
 
 # ---------------------------------------------------------------------------
-# Tools
+# Turn engine (tools live on Angela MCP — back/mcp/home + brain + todo)
 
-# mari activity configs: aliased app launches + named commands (plan §9.2)
-loadActivities = ->
-  apps = {}     # app name -> full shell line
-  commands = {} # "activity.key" -> shell line
-  return { apps, commands } unless existsSync CFG.activityDir
-  for f in readdirSync CFG.activityDir
-    continue unless f.endsWith('.yml') or f.endsWith('.yaml')
-    try
-      doc = yaml.load readFileSync("#{CFG.activityDir}/#{f}", 'utf8')
-    catch e then continue
-    continue unless doc?.name
-    if doc.shell_aliases
-      for target in Object.values doc.shell_aliases
-        apps[target] = if doc.shell_prefix then "#{doc.shell_prefix} #{target}" else target
-    if doc.commands
-      for own key, val of doc.commands
-        shell = if typeof val is 'string' then val else val?.shell
-        commands["#{doc.name}.#{key}"] = shell if typeof shell is 'string'
-  { apps, commands }
-
-activities = loadActivities()
-log "activities: #{Object.keys(activities.apps).length} apps, #{Object.keys(activities.commands).length} commands"
-
-# Run a tool command without ever throwing: a missing binary or non-zero
-# exit becomes a failure *string* the LLM can relay ("the desk lamp
-# didn't respond") instead of an exception that aborts the whole turn as
-# "Sorry, something went wrong".
-runCmd = (cmd, args) ->
-  try
-    child = spawn cmd, args.map(String)
-    await child.promise
-    { ok: child.code is 0, out: (child.stdout + child.stderr).trim().slice(0, 200) }
-  catch e
-    { ok: false, out: "#{cmd}: #{e.message}" }
-
-# Launcher-style commands may run long (apps, sessions): report started
-# rather than hanging the turn. Optional setKill for progress cancel (M5).
-shellTool = (shellLine, timeoutMs = 10000, setKill = null) ->
-  try
-    child = spawn 'bash', ['-c', shellLine]
-    setKill?(-> child.kill?('SIGTERM'))
-    timeout = new Promise (r) -> setTimeout (-> r 'TIMEOUT'), timeoutMs
-    result = await Promise.race [child.promise, timeout]
-    return "started (still running): #{shellLine}" if result is 'TIMEOUT'
-    if child.code is 0
-      "ok: #{shellLine}#{if child.stdout then " — #{child.stdout.trim().slice 0, 200}" else ''}"
-    else
-      "failed (exit #{child.code}): #{shellLine} — #{(child.stderr or child.stdout).trim().slice 0, 200}"
-  catch e
-    "failed: #{shellLine} — #{e.message}"
-
-registerTools = (agent) ->
-  # Self-heal: if brain mcp wasn't up at process start (or dropped mid-day),
-  # start Ada's stdio instance against the `ada` database and register tools.
-  await ensureBrainMcp
-    cwd: CFG.brainCwd
-    root: CFG.brainPath
-    alias: CFG.brainAlias
-  # -- home lights + pixel alarm (shared with agl home.mjs) -----------------
-  agent.Tool desk_light
-  agent.Tool pc_light_color
-  agent.Tool alarm__create
-  agent.Tool alarm__list
-  agent.Tool alarm__update
-  agent.Tool alarm__delete
-  agent.Tool alarm__show
-  agent.Tool alarm__snooze
-  agent.Tool timer__create
-  agent.Tool timer__dismiss
-  agent.Tool timer__show
-
-  # -- media keys ------------------------------------------------------------
-  # MPRIS via playerctl (what the hardware media keys map to on any desktop
-  # Linux; browsers like Zen/Firefox expose their playing tab over MPRIS).
-  # With several players around, transport targets the one actually
-  # Playing (else the first), so "pause the music" hits the right tab.
-  pickPlayer = ->
-    res = await runCmd 'playerctl', ['-l']
-    return null unless res.ok and res.out
-    players = res.out.split('\n').filter Boolean
-    paused = null
-    for p in players
-      st = await runCmd 'playerctl', ['-p', p, 'status']
-      continue unless st.ok
-      status = st.out.trim()
-      return p if status is 'Playing'
-      paused ?= p if status is 'Paused' # resume targets what was paused, not player #1
-    paused ? players[0] ? null
-
-  agent.Tool 'media_control',
-    'control the currently playing media (music or video in the browser or ' +
-    'any media player: pause, play, skip tracks) and/or set the system ' +
-    'output volume — the equivalent of the keyboard media keys.',
-    action: { type: 'string', enum: ['play', 'pause', 'play-pause', 'next', 'previous', 'stop'], description: 'transport action for the active media player. omit when only changing volume.' }
-    volume: { type: 'integer', description: 'set system output volume as a percent, 0-100. omit when only controlling playback.' }
-  , [], (ctx, { action, volume }) ->
-    parts = []
-    if action
-      player = await pickPlayer()
-      if player
-        res = await runCmd 'playerctl', ['-p', player, action]
-        who = player.replace /\..*$/, '' # "firefox.instance_1_31" -> "firefox"
-        parts.push if res.ok then "media #{action} ok (#{who})." \
-                    else "media #{action} failed (#{res.out})."
-      else
-        parts.push 'no media player is running.'
-    if volume?
-      v = clamp forceInt(volume, 0), 0, 100
-      res = await runCmd 'wpctl', ['set-volume', '@DEFAULT_AUDIO_SINK@', "#{v}%"]
-      parts.push if res.ok then "system volume set to #{v} percent." \
-                  else "volume change failed (#{res.out})."
-    parts.join(' ') or 'no media action requested (specify action and/or volume).'
-
-  agent.Tool 'current_time',
-    'get the current local date, time, and timezone', {}, [], ->
-      now = new Date()
-      tz = Intl.DateTimeFormat().resolvedOptions().timeZone
-      local = now.toLocaleString 'en-US',
-        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
-        hour: 'numeric', minute: '2-digit', second: '2-digit', timeZoneName: 'short'
-      "#{local} (timezone #{tz}; ISO #{now.toISOString()})"
-
-  # -- app launching ---------------------------------------------------------
-  # Open-ended but shell-safe (mari's `!` SHELL-mode semantics): the app
-  # name must be one bare token — no spaces, slashes, or shell metachars —
-  # passed as a single argv to ~/launch.sh, which nohup-execs it as a
-  # program name. Nothing to inject into and no arguments possible, so the
-  # worst case is launching some argument-less program by name.
-  appNames = Object.keys activities.apps
-  agent.Tool 'run_application',
-    'launch a desktop application by its program name (as found on PATH), ' +
-    'e.g. audacity, discord, zen-browser. Use the plain lowercase binary ' +
-    'name, a single word.' +
-    (if appNames.length then " Known favorites: #{appNames.join ', '}." else ''),
-    app: { type: 'string', description: 'program name: one word, lowercase, no spaces or paths' }
-  , ['app'], (ctx, { app }) ->
-    name = String(app ? '').trim()
-    unless /^[A-Za-z0-9._+-]{1,64}$/.test name
-      return "refused: \"#{name}\" is not a plain program name (one word, no spaces or paths)"
-    res = await runCmd "#{process.env.HOME}/launch.sh", [name]
-    if res.ok then "launched #{name}." else "failed to launch #{name} (#{res.out})"
-
-  cmdIds = Object.keys activities.commands
-  if cmdIds.length
-    listing = cmdIds.map((id) -> "#{id}: #{activities.commands[id]}").join '\n'
-    agent.Tool 'run_activity_command',
-      'run one of my predefined activity commands (home automation, work laptop, sessions). ' +
-      "Available commands (id: shell):\n#{listing}",
-      id: { type: 'string', enum: cmdIds, description: 'the command id to run' }
-    , ['id'], (ctx, { id }) ->
-      line = activities.commands[id]
-      return "unknown command: #{id}" unless line
-      shellTool line, 10000, ctx?.__progressSetKill
-
-  # -- browser control, delegated to the ada-browser sub-agent ---------------
-  agent.Tool 'control_browser',
-    'Delegate a task to a specialized sub-agent that can see and control my ' +
-    'web browser: open/navigate/close tabs, read a page, click, fill in ' +
-    'forms, scroll, screenshot, wait for content, run JavaScript. Give it ' +
-    'one clear task in plain English (e.g. "open chewy.com and tell me my ' +
-    'most recent order"); it figures out and performs whatever browser ' +
-    'steps are needed and reports back what it found or did.',
-    task: { type: 'string', description: 'the browser task to perform, in plain English' }
-  , ['task'], (ctx, { task }) ->
-    await runBrowserAgent task
-
-  # -- long-term memory (brain MCP over stdio) -------------------------------
-  registerBrainTools agent
-
-  # -- task lists (todo MCP over stdio; tasks.md DSL) -------------------------
-  registerTodoTools agent
-
-  # After all tools registered: allowlist+risk gate, then journal calls.
-  wrapToolsWithGateAndLogging agent
-
-# ---------------------------------------------------------------------------
-# Turn engine
 
 # SOUL.md: standing knowledge (who Mike is, preferences, facts) appended
 # to the system prompt at startup — edit the file, restart the back.
@@ -707,7 +553,9 @@ BASE_PROMPT = '''
   300). Prefer matching existing alarms by label when deleting or
   updating. alarm__list only reports the next scheduled alarm (Clock has
   no list intent). alarm__snooze only affects a currently ringing alarm.
-  Call each necessary tool at most once. You can also launch
+  You may call several tools in one turn when a result tells you to
+  continue — especially a brain tool `advice:` field, or an empty
+  retrieval. Do not stop at the first empty search. You can also launch
   desktop apps by their program name (run_application, e.g. audacity, discord), run
   predefined activity commands (run_activity_command), and control media
   playback and system volume like keyboard media keys (media_control).
@@ -715,91 +563,80 @@ BASE_PROMPT = '''
   whole task to control_browser in one call (it can see and drive my
   actual browser: navigate, read pages, click, fill forms) rather than
   trying to guess at browser tools yourself.
-  Long-term memory is on disk via tools — you do not remember across
-  restarts unless a tool write succeeds.
-  When Mike says remember / do not forget / states a lasting preference:
-  you MUST call remember_fact (preferred) or brain_put_entity in this turn
-  BEFORE saying you remembered. Never claim success without a successful
-  tool result. Prefer stable slugs (e.g. Note/favorite-color) so updates
-  overwrite the same fact. For "what is my favorite color" use
-  recall_search or brain_get_entity / brain_search.
-  Person ids are first-initial + last name lowercased (Mike Smullin is
-  Person/msmullin). If earlier conversation was trimmed for length, you
-  will see a notice — recover by using brain tools or asking Mike.
-  Priorities and multi-step work live in the shared task list tools
-  (todo_next, todo_tree, todo_view, todo_take, todo_release, todo_upsert).
-  When Mike asks what to do next or about the task list, call todo_next
-  (or todo_tree) — do not invent tasks. Say you updated a task only after
-  a successful todo_* write.
+  Long-term memory is on disk via brain tools — you do not remember
+  across restarts unless a write succeeds. When Mike says remember / do
+  not forget / states a lasting preference: you MUST call
+  brain__put_entity in this turn BEFORE saying you remembered. Prefer
+  stable slugs (e.g. Note/favorite-color). For recall use brain__search,
+  brain__think, or brain__ontology (follow any advice: in the tool
+  result; do not invent). Prefer brain__get_entity when you know the
+  slug. Person ids are first-initial + last name
+  lowercased (Mike Smullin is Person/msmullin). If older chat was trimmed
+  for length, recover with brain tools or ask Mike.
+  Priorities live in todo__next, todo__tree, todo__view, todo__take,
+  todo__release, todo__upsert. When Mike asks what to do next, call
+  todo__next — do not invent tasks.
+  After you ask a question or otherwise expect a spoken reply (knock-knock
+  setup, "ready?", a choice), you MUST call listen in that same turn as a
+  tool call — do not only think about calling it, and do not end the turn
+  on spoken text alone. timeout is seconds to wait for him to start
+  speaking (default 6). The listen tool result is a status note, not Mike's
+  words. His utterance follows as the next user message — reply to that.
+  Do not call listen if the exchange is finished.
   Do not pull work-laptop secrets into chat. If the user is just talking,
   just talk back — do not use tools.
   '''
 
 SYSTEM_PROMPT = BASE_PROMPT + loadSoul()
 
-# Conversation context — loaded from logs/ada.yaml on startup (persists across restarts).
-history = []
 currentTurn = null
 turnCounter = 0
-# Set when front-trim drops older turns so the model knows history is incomplete.
-compactionNotice = null
+turnSplitter = null
 
-# Restore prior session context before the first turn (never wipe on process start).
-try
-  restored = loadHistory CFG.ctxLogPath
-  if restored.length
-    history = restored
-    console.error "ctx-log: restored #{history.length} messages from #{CFG.ctxLogPath}"
-  else
-    console.error "ctx-log: empty or new (#{CFG.ctxLogPath})"
-catch e
-  console.error "ctx-log: restore failed: #{e.message}"
+lastCompletion = (result) ->
+  choice = result?.choices?[0]
+  finish: String(choice?.finish_reason or result?.finish_reason or '')
+  content: String(choice?.message?.content or '')
 
-# Rough token estimate (chars/4) until a real tokenizer is wired.
-estimateTokens = (s) -> Math.ceil(String(s or '').length / 4)
-
-# PLAN2 W7: front-trim oldest history turns until system+history+user fit budget.
-compactHistoryForPrompt = (userText) ->
-  reserve = CFG.contextReserveTokens
-  budget = Math.max(1000, CFG.contextMaxTokens - reserve)
-  systemTok = estimateTokens SYSTEM_PROMPT
-  userTok = estimateTokens userText
-  # Keep a working copy of the soft-capped recent window, then drop from the front.
-  recent = history.slice -CFG.historyMax
-  notice = ''
-  dropped = 0
-  loop
-    ctx = recent.map((h) -> "#{h.who}: #{h.text}").join '\n'
-    noticeBlock = if notice then "#{notice}\n\n" else ''
-    total = systemTok + estimateTokens(noticeBlock + ctx) + userTok + 64
-    break if total <= budget or recent.length is 0
-    recent.shift()
-    dropped++
-    notice = 'Context notice: earlier turns in this long day were dropped to fit the model window. Durable facts should be in brain memory — use brain_search or brain_get_entity, or ask Mike.'
-  compactionNotice = if dropped > 0 then notice else null
-  { recent, notice: compactionNotice, dropped }
-
-renderPrompt = (text) ->
-  { recent, notice } = compactHistoryForPrompt text
-  parts = []
-  parts.push notice if notice
-  ctx = recent.map((h) -> "#{h.who}: #{h.text}").join '\n'
-  parts.push "(recent conversation for context:\n#{ctx})" if ctx
-  prefix = if parts.length then parts.join('\n\n') + '\n\n' else ''
-  prefix + text
+# After a freeform stop: if the last spoken reply asked a question, open the
+# ear without waiting for a listen tool call. STT becomes a new user turn
+# (session.run already returned — unlike the listen tool's in-flight inject).
+maybeAutoListen = (turn, result) ->
+  return if turn.cancelled or pttDown or gathering
+  # Listen tool already opened the ear this turn (`?` + listen) — don't arm twice.
+  return if turn.hadListen or listenSession? or earJobs.length
+  { finish, content } = lastCompletion result
+  return unless finish.toLowerCase() is 'stop'
+  return unless /[?？]/.test content
+  log "auto-listen: last reply contains ? (finish=#{finish})"
+  try
+    heard = await beginListen CFG.listenStartSec, asUser: true, turn: turn
+  catch e
+    log "auto-listen: #{e.message}"
+    return
+  text = String(heard?.text or '').trim()
+  return unless heard?.ok and text
+  return if heard.injected # listen tool already put STT on this run
+  return if turn.cancelled or currentTurn?
+  await runTurn { text, t_end: Date.now() / 1000 }, 'listen'
 
 runTurn = (utt, gate) ->
   # barge-in: a new passing utterance cancels whatever is pending/speaking —
   # clear our queue AND silence the daemon immediately (don't wait for the
   # reply's first sentence to interrupt)
+  listenEpoch++
   if currentTurn
     currentTurn.cancelled = true
-    stopSpeech()
+    try
+      await adaSession?.abort 'barge-in'
+    catch e then log "abort: #{e.message}"
+  stopSpeech()
   speaker.clear()
 
   turn =
     id: ++turnCounter
     cancelled: false
+    hadListen: false
     reply: ''
     lat:
       eou: if utt.t_end then utt.t_end * 1000 else null # unix ms, perception clock
@@ -811,7 +648,9 @@ runTurn = (utt, gate) ->
   currentTurn = turn
 
   sfx 'activate' unless gate is 'ptt'
-  setState active: true, thinking: true
+  gathering = false
+  setEar 0 unless listenSession?
+  setState thinking: true, active: pttDown
   log "turn #{turn.id} [#{gate}]: #{utt.text}"
 
   splitter = new SentenceSplitter (sentence) ->
@@ -821,51 +660,31 @@ runTurn = (utt, gate) ->
     first = turn.lat.firstSentence is null
     turn.lat.firstSentence = performance.now() if first
     speaker.enqueue sentence, turn, (if first then 'interrupt' else 'enqueue')
+  turnSplitter = splitter
 
+  runResult = null
   try
-    # fresh agent per turn so a cancelled turn's late tokens stream into its
-    # own dead splitter, never the new turn's
-    agent = await Agent.factory
-      model: CFG.model
-      reasoning_effort: 'low'
-      parallel_tools: true
-      stream: true
-      system_prompt: SYSTEM_PROMPT
-      # Gemma-4 / LM Studio streams thinking as reasoning_content. agl-ai
-      # passes those as on_delta(text, { channel: 'reasoning' }). Only speak
-      # and caption the visible assistant content channel.
-      on_delta: (d, meta) ->
-        return if turn.cancelled
-        return if meta?.channel is 'reasoning'
-        return unless d
-        turn.lat.firstToken = performance.now() if turn.lat.firstToken is null
-        turn.reply += d
-        splitter.push d
-    await registerTools agent
-    await agent.run prompt: renderPrompt(utt.text)
+    try
+      adaHarness?.policy?.setAllowlist readFileSync(CFG.allowlistPath, 'utf8')
+    catch e then null
+    agent = adaSession?.agent
+    if agent
+      n = compactContextWindow agent, reserveTokens: CFG.contextReserveTokens
+      log "turn #{turn.id}: compacted #{n} lines" if n
+    runResult = await adaSession.run prompt: utt.text
   catch e
-    log "turn #{turn.id} error: #{e.message}"
-    speaker.enqueue 'Sorry, something went wrong.', turn unless turn.cancelled
+    unless turn.cancelled or e?.aborted or /listen-empty/.test(e?.message or '')
+      log "turn #{turn.id} error: #{e.message}"
+      speaker.enqueue 'Sorry, something went wrong.', turn
+    else
+      log "turn #{turn.id} aborted: #{e.message}"
   splitter.flush()
-
-  unless turn.cancelled
-    history.push { who: 'user', text: utt.text, ts: stampNow() }
-    if turn.reply.trim()
-      history.push { who: 'ada', text: turn.reply.trim(), ts: stampNow() }
-    # Ring + disk: persist full window; compaction logrotates into ada.archive.yaml
-    # (unlike gl1, we never truncate the log on process start).
-    maxRing = Math.max CFG.historyMax * 4, 64
-    { history: history, dropped } = compactAndPersist CFG.ctxLogPath, history, maxRing
-    if dropped.length
-      log "turn #{turn.id}: ctx-log rotated #{dropped.length} messages → archive"
-    if compactionNotice
-      log "turn #{turn.id}: context compacted (front-trim active)"
+  turnSplitter = null if turnSplitter is splitter
 
   if currentTurn is turn
     currentTurn = null
     setState thinking: false
-    convWindowUntil = Date.now() + CFG.convWindowMs
-    setTimeout maybeIdle, CFG.convWindowMs + 50
+    maybeIdle()
 
   # latency report (plan §7)
   l = turn.lat
@@ -875,6 +694,8 @@ runTurn = (utt, gate) ->
     "utterance→first_token=#{ms l.firstToken} first_sentence=#{ms l.firstSentence} " +
     "speech_done=#{ms l.lastAudioDone}#{if turn.cancelled then ' (cancelled)' else ''}"
 
+  await maybeAutoListen turn, runResult
+
 cancelAll = (reason) ->
   # Avatar short-click: belay every remaining Tom challenge (current + queue).
   if tomIsWaiting() or reason is 'click'
@@ -883,6 +704,7 @@ cancelAll = (reason) ->
       try
         broadcast { ev: 'caption', who: 'tom', text: '' }
       catch e then null
+  listenEpoch++
   if currentTurn
     log "cancel (#{reason}): turn #{currentTurn.id}"
     currentTurn.cancelled = true
@@ -890,8 +712,11 @@ cancelAll = (reason) ->
   speaker.clear()
   stopSpeech() # silence anything already playing, whisper-style cancel
   sfx 'click-off'
-  convWindowUntil = 0
+  try
+    adaSession?.abort reason
+  catch e then null
   setState thinking: false, active: pttDown
+  maybeIdle()
 
 # ---------------------------------------------------------------------------
 # perception-voice words stream (framed JSON: 4-byte BE length + payload)
@@ -902,33 +727,72 @@ frameJson = (obj) ->
   header.writeUInt32BE payload.length
   Buffer.concat [header, payload]
 
+onLevelsFrame = (frame) ->
+  micSpeaking = Boolean frame?.speaking
+  listenSession?.tickLevels frame
+  if gathering
+    feedPartial gatherBuf, gatherBuf.lastPartial, micSpeaking
+
 onWordsEvent = (msg) ->
   if msg.ev is 'partial'
-    # pre-activation feedback: light the orb up as soon as the wake word (or
-    # a held PTT) is heard, before the utterance even finalizes
-    if not state.active and (pttDown or CFG.wake.test(msg.text or '') or tomIsWaiting())
+    if listenSession?
+      listenSession.feedPartial msg.text or '', micSpeaking
+      return
+    if tomIsWaiting()
+      setState active: true
+      return
+    wakeHit = CFG.wake.test(msg.text or '')
+    if wakeHit and not currentTurn and not pttDown
+      unless gathering
+        gathering = true
+        gatherCancelled = false
+        gatherBuf = createTranscriptBuf()
+        setState active: true
+        setEar 1
+      feedPartial gatherBuf, msg.text or '', micSpeaking
+    else if gathering
+      feedPartial gatherBuf, msg.text or '', micSpeaking
+    else if not state.active and (pttDown or wakeHit)
       setState active: true
     return
   if msg.ev is 'utterance'
-    # Tom confirmation captures the next utterance(s) without starting a turn.
     if tomIsWaiting()
       log "tom heard: #{msg.text}"
       tomFeedUtterance msg.text or ''
-      convWindowUntil = Date.now() + CFG.convWindowMs
-      setState active: true
       return
-    # Long-tool progress: only cancel phrase is accepted (hold other speech).
     if progressIsWaiting()
       progressFeedUtterance msg.text or ''
-      convWindowUntil = Date.now() + CFG.convWindowMs
-      setState active: true
       return
+    if listenSession?
+      listenSession.feedUtterance msg.text or ''
+      return
+    if gathering and gatherCancelled
+      log "(cancelled gather) #{msg.text}"
+      gathering = false
+      gatherCancelled = false
+      maybeIdle()
+      return
+    gathering = false
+    setEar 0 unless listenSession?
     gate = activationGate msg
     unless gate
+      lastUnaddressed =
+        text: msg.text
+        t_end: msg.t_end or Date.now() / 1000
       log "(unaddressed) #{msg.text}"
       maybeIdle()
       return
-    runTurn msg, gate # async; not awaited — barge-in handles overlap
+    text = String(msg.text or '')
+    if lastUnaddressed?.t_end? and msg.t_start?
+      if msg.t_start - lastUnaddressed.t_end <= CFG.slopSec
+        extra = String(lastUnaddressed.text or '').trim()
+        text = "#{extra}\n#{text}" if extra
+    lastUnaddressed = null
+    gathered = snapshotText gatherBuf
+    if gathered and gathered.length > text.length
+      text = gathered
+    gatherBuf = createTranscriptBuf()
+    runTurn { msg..., text }, gate
 
 connectWords = (isRetry = false) ->
   acc = Buffer.alloc 0
@@ -964,6 +828,288 @@ connectWords = (isRetry = false) ->
     setState listening: false
     log 'words stream lost; reconnecting…'
     setTimeout (-> connectWords true), 1000
+
+connectPresenceEvents = (isRetry = false) ->
+  sock = net.connect CFG.presenceSock, ->
+    sock.write 'subscribe\tevents\n'
+  acc = ''
+  acked = false
+  sock.on 'data', (d) ->
+    acc += d.toString()
+    loop
+      idx = acc.indexOf '\n'
+      break if idx < 0
+      line = acc.slice(0, idx).trim()
+      acc = acc.slice idx + 1
+      unless acked
+        acked = true
+        unless line is 'OK'
+          log "presence events subscribe rejected: #{line}"
+          sock.end()
+        else
+          log 'subscribed to presence-voice events'
+        continue
+      continue unless line
+      try
+        msg = JSON.parse line
+      catch e then continue
+      if msg.ev is 'speak-start'
+        voicePlay.eventsLive = true
+        voicePlay.suppressEnd = false
+        voicePlay.speaking = true
+      else if msg.ev is 'speak-end'
+        voicePlay.eventsLive = true
+        voicePlay.speaking = false
+        unless voicePlay.suppressEnd
+          voicePlay.pending = Math.max 0, voicePlay.pending - 1
+  sock.on 'error', (e) ->
+    log "presence events: #{e.message}" unless isRetry
+  sock.on 'close', ->
+    voicePlay.eventsLive = false
+    voicePlay.speaking = false
+    log 'presence events lost; reconnecting…' if acked
+    setTimeout (-> connectPresenceEvents true), 1000
+
+# ---------------------------------------------------------------------------
+# listen tool socket (home MCP shim → this waiter)
+#
+# One in-flight ear at a time. Extra listen requests (listen tool + `?`
+# auto-listen, or two listen tool calls) collapse onto that one session —
+# all waiters share the result. STT is delivered once.
+
+sleep = (ms) -> new Promise (r) -> setTimeout r, ms
+
+isVocalizing = ->
+  speaker.busy() or voicePlay.pending > 0 or voicePlay.speaking
+
+settleEar = (job, result) ->
+  return if job.settled
+  job.settled = true
+  for w in job.waiters or []
+    w.resolve result
+
+waitVocalization = (epoch) ->
+  turnSplitter?.flush()
+  loop
+    return false if epoch isnt listenEpoch
+    unless isVocalizing()
+      await sleep 80
+      return false if epoch isnt listenEpoch
+      return true unless isVocalizing()
+    await sleep 40
+
+# Stream reducer: at most one ear job. A new request joins the live or
+# queued session instead of opening a second.
+attachEar = (waiter) ->
+  live = earJobs.find (j) -> not j.cancelled and not j.settled
+  if live?
+    log "ear: reducer — join #{if live.started then 'in-flight' else 'queued'} listen (#{live.waiters.length + 1} waiters)"
+    live.waiters.push waiter
+    if waiter.timeoutSec > (live.timeoutSec or 0)
+      live.timeoutSec = waiter.timeoutSec
+    currentTurn?.hadListen = true
+    waiter.opts.turn?.hadListen = true
+    return
+  job =
+    timeoutSec: waiter.timeoutSec
+    opts: waiter.opts or {}
+    waiters: [waiter]
+    started: false
+    cancelled: false
+    settled: false
+    epoch: listenEpoch
+  earJobs.push job
+  pumpEar()
+  return
+
+pumpEar = ->
+  return if earPumping
+  earPumping = true
+  try
+    while earJobs.length
+      job = earJobs[0]
+      if job.cancelled
+        earJobs.shift()
+        continue
+      asUserOnly = (job.waiters or []).every (w) -> w.opts.asUser
+      turn = job.opts.turn or job.waiters?[0]?.opts?.turn
+      if asUserOnly and (turn?.cancelled or currentTurn?)
+        settleEar job, { ok: false, reason: 'cancelled', text: '' }
+        earJobs.shift()
+        continue
+      job.started = true
+      try
+        settleEar job, await armEar job
+      catch e
+        settleEar job, { ok: false, reason: 'error', text: e.message }
+      earJobs.shift()
+  finally
+    earPumping = false
+
+armEar = (job) ->
+  if job.cancelled or job.epoch isnt listenEpoch
+    return { ok: false, reason: 'cancelled', text: '' }
+  currentTurn?.hadListen = true
+  for w in job.waiters or []
+    w.opts.turn?.hadListen = true
+  job.opts = job.waiters?[0]?.opts or job.opts or {}
+  turnSplitter?.flush()
+  log "ear: armed (parallel with vocalization, #{job.waiters.length} waiter#{if job.waiters.length is 1 then '' else 's'})"
+  sess = createListenSession
+    timeoutSec: job.timeoutSec
+    log: log
+    onTick: (s) ->
+      h = s.hud()
+      setEar h.phase, h.remain, h.total
+    onStart: ->
+      setState active: true
+      setEar 1
+    onEnd: (s, result) ->
+      listenSession = null if listenSession is s
+      text = String(result?.text or '').trim()
+      barged = Boolean(result?.ok and text and isVocalizing())
+      if barged
+        log 'ear: barge-in — stop speech, take utterance'
+        stopSpeech()
+        speaker.clear()
+        result.reason = 'interrupt'
+      if result?.ok and text
+        flashEar if barged then 7 else 6
+      else if result?.reason is 'timeout' and s.heardWords
+        flashEar 5
+      else if result?.reason is 'timeout'
+        flashEar 3
+      else
+        setEar 0
+      maybeIdle()
+      # One STT delivery. Prefer in-run inject if any waiter is the listen
+      # tool; asUser waiters then skip opening a second turn.
+      inject = (job.waiters or []).some (w) -> not w.opts.asUser
+      if result?.ok and text and inject
+        try
+          adaSession?.agent?.enqueueUserAfterTools? text
+          result.injected = true
+        catch e
+          log "listen enqueue user: #{e.message}"
+      else if inject and not (result?.ok and text)
+        # Tool result still goes back; do not start another completion.
+        try
+          adaSession?.agent?.abort 'listen-empty'
+        catch e then null
+      log "listen done ok=#{result.ok} reason=#{result.reason or ''} #{text.slice 0, 80}"
+  listenSession = sess
+  # Chime + start-timeout wait for her playback to actually end. The ear
+  # is already capturing STT so a barge-in can land while she talks.
+  do ->
+    ok = await waitVocalization job.epoch
+    return unless ok and not sess.done and not job.cancelled
+    sess.armFromBufferIfAny()
+    if sess.heardWords
+      log 'ear: vocalization done — user already speaking, skip chime/start clock'
+      return
+    log 'ear: vocalization done — listen-on then start timeout'
+    await sfxAwait 'listen-on'
+    return if sess.done or job.cancelled or job.epoch isnt listenEpoch
+    sess.armFromBufferIfAny()
+    return if sess.heardWords
+    sess.releaseStartClock()
+  sess.promise
+
+beginListen = (timeoutSec, opts = {}) ->
+  new Promise (resolve) ->
+    attachEar {
+      timeoutSec: timeoutSec or CFG.listenStartSec
+      opts
+      resolve
+    }
+
+startVoiceSock = ->
+  try unlinkSync CFG.voiceSock if existsSync CFG.voiceSock
+  catch e then null
+  server = net.createServer (sock) ->
+    acc = ''
+    sock.on 'data', (buf) ->
+      acc += buf.toString()
+      while (idx = acc.indexOf '\n') >= 0
+        line = acc.slice(0, idx).trim()
+        acc = acc.slice idx + 1
+        continue unless line
+        try
+          req = JSON.parse line
+        catch e
+          sock.write JSON.stringify({ ok: false, reason: 'bad-json' }) + '\n'
+          continue
+        if req.cmd is 'listen'
+          try
+            result = await beginListen req.timeout
+          catch e
+            result = { ok: false, reason: 'error', text: e.message }
+          try sock.write JSON.stringify(result) + '\n'
+          catch e then null
+        else
+          sock.write JSON.stringify({ ok: false, reason: 'unknown-cmd' }) + '\n'
+    sock.on 'error', -> null
+  server.listen CFG.voiceSock
+  log "voice sock listening on unix://#{CFG.voiceSock}"
+
+readAllowlistText = ->
+  try
+    readFileSync CFG.allowlistPath, 'utf8'
+  catch e
+    ''
+
+tomApprover = (req) ->
+  unless CFG.confirmEnabled
+    return 'deny'
+  wave = joinToolWave()
+  registerToolWaveGate wave, true
+  speaker.clear()
+  stopSpeech()
+  tom = await runTomInWave wave,
+    toolName: req.tool
+    args: req.args
+    risk: 'medium'
+    speakOnce: speakOnce
+    stopSpeech: stopSpeech
+    broadcast: broadcast
+    voiceTom: CFG.voiceTom
+    denyPhrases: CFG.denyPhrases
+    timeoutMs: CFG.confirmTimeoutMs
+    log: log
+  if tom.approved then 'allow' else 'deny'
+
+persistSessionId = (id) ->
+  try
+    mkdirSync dirname(CFG.sessionFile), recursive: true
+    writeFileSync CFG.sessionFile, "#{id}\n"
+  catch e
+    log "session id write failed: #{e.message}"
+
+openOrCreateSession = (harness) ->
+  id = null
+  try
+    id = readFileSync(CFG.sessionFile, 'utf8').trim() if existsSync CFG.sessionFile
+  catch e then null
+  if id
+    try
+      sess = await harness.session.open id
+      log "resumed angela session #{id}"
+      return sess
+    catch e
+      log "session open failed (#{e.message}); creating new"
+  sess = await harness.session.create title: 'ada', agent: 'ada'
+  persistSessionId sess.id
+  log "created angela session #{sess.id}"
+  sess
+
+onHarnessDelta = (d, meta) ->
+  turn = currentTurn
+  return unless turn and not turn.cancelled
+  return if meta?.channel is 'reasoning'
+  return unless d
+  turn.lat.firstToken = performance.now() if turn.lat.firstToken is null
+  turn.reply += d
+  turnSplitter?.push d
 
 # ---------------------------------------------------------------------------
 # startup
@@ -1004,12 +1150,65 @@ main = ->
 
   todoOk = await ensureTodoMcp shared: CFG.taskShared
   log if todoOk then "todo mcp ready (#{CFG.taskShared})" else 'todo mcp unavailable'
-  log "ctx-log: #{CFG.ctxLogPath} (#{history.length} messages in memory)"
+
+  bun = process.execPath
+  mcp = [
+    name: 'home'
+    prefix: false
+    command: bun
+    args: [join ADA_ROOT, 'back/mcp/home/server.coffee']
+    cwd: join ADA_ROOT, 'back'
+    env:
+      ADA_ACTIVITY_DIR: CFG.activityDir
+      ADA_VOICE_SOCK: CFG.voiceSock
+      ADA_MODEL: CFG.model
+      FAV_LOCAL_LLM: CFG.model
+  ]
+  mcp.push
+    name: 'brain'
+    command: process.env.ADA_BRAIN_CMD or 'brain'
+    args: ['--use', CFG.brainAlias, 'mcp']
+    cwd: CFG.brainCwd
+    env:
+      ADA_MAX_TURNS: String(CFG.maxTurns)
+  if todoOk
+    mcp.push
+      name: 'todo'
+      command: process.env.ADA_TODO_CMD or 'todo'
+      args: ['mcp']
+      env:
+        TODO_SHARED: CFG.taskShared
+        TODO_DEFAULT_LIST: 'shared'
+
+  adaHarness = await Angela.create
+    projectRoot: ADA_ROOT
+    model: CFG.model
+    system: SYSTEM_PROMPT
+    retain_history: true
+    stream: true
+    parallel_tools: true
+    reasoning_effort: 'low'
+    policyMode: 'ask'
+    allowlist: readAllowlistText()
+    onApproval: tomApprover
+    mcp: mcp
+    persistSessions: true
+    on_delta: onHarnessDelta
+    max_turns: CFG.maxTurns
+
+  adaSession = await openOrCreateSession adaHarness
+  await adaSession.listToolCatalog()
+  wrapToolsForUx adaSession.agent if adaSession.agent
+  log "angela tools: #{Object.keys(adaSession.agent?.tools or {}).join ', '}"
 
   startAvatarServer()
+  startVoiceSock()
   connectWords()
+  connectLevels CFG.perceptionSock, onLevelsFrame, log
+  connectPresenceEvents()
   log "ada-back ready (voice=#{CFG.voice} tom=#{CFG.voiceTom} confirm=#{CFG.confirmEnabled} " +
-    "model=#{CFG.model} wake=#{CFG.wake} brain=#{if brainOk then 'on' else 'off'} todo=#{if todoOk then 'on' else 'off'})"
+    "model=#{CFG.model} max_turns=#{CFG.maxTurns} wake=#{CFG.wake} session=#{adaSession.id} " +
+    "brain=#{if brainOk then 'on' else 'off'} todo=#{if todoOk then 'on' else 'off'})"
 
   # ADA_SELFTEST="<text>": run one synthetic utterance through the full
   # turn pipeline (gate → agent → splitter → speaker → latency report)
@@ -1029,6 +1228,12 @@ main = ->
   process.on sig, ->
     try
       unlinkSync CFG.backSock if existsSync CFG.backSock
+    catch e then null
+    try
+      unlinkSync CFG.voiceSock if existsSync CFG.voiceSock
+    catch e then null
+    try
+      adaHarness?.close?()
     catch e then null
     releaseInstanceLock()
     process.exit 0

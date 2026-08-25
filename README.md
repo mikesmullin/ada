@@ -20,11 +20,11 @@ Design doc: [docs/PLAN.md](docs/PLAN.md) · wire spec: [docs/PROTOCOL.md](docs/P
   (idle/listening/active/thinking/speaking), your voice's spectral bands on
   the halo, her voice on the core. `WM_CLASS = "ada"` so awesome-WM rules
   own placement ([docs/rc.lua.example](docs/rc.lua.example)).
-- **`back/ada-back.coffee`** (Bun CoffeeScript + agl-ai) — the conversation loop:
-  perception-voice `subscribe words` push stream (partials + finals) →
-  activation gate → streamed LLM turn → per-sentence TTS. Tools:
-  conversation, home lights (govee/openrgb), mari activities (apps +
-  commands from `/workspace/mari/activity/*.yml`).
+- **`back/ada-back.coffee`** (Bun CoffeeScript + **Angela** + agl-ai) — the
+  conversation loop: perception-voice words stream → wake/PTT gate (or
+  `listen` tool) → Angela `session.run` (retained context in
+  `.angela/sessions/`) → per-sentence TTS. House tools are an MCP stdio
+  server (`back/mcp/home`); brain and todo are existing MCP servers.
 
 ## Run
 
@@ -36,9 +36,11 @@ ada avatar --style orb           # alt style: the glowing liquid orb
 ada avatar --solo                # no services: 1-5 toggle states, space pulse
 ```
 
-Orb input: **hold left button = push-to-talk**, short click = cancel,
-`q`/`esc` quit. Voice activation: say "Ada …" (transcript matching), plus
-an 8 s conversation window after each exchange for follow-ups.
+Orb input: **hold left button = push-to-talk**, short click = cancel
+listen if she is actively listening (wake-word gathering or `listen`
+tool), otherwise cancel speech / the turn. `q`/`esc` quit. Voice
+activation: say "Ada …" (transcript matching). She does not keep
+listening after she answers unless she calls the `listen` tool.
 
 ## Install
 
@@ -51,8 +53,8 @@ systemctl --user daemon-reload && systemctl --user enable --now ada-back
 ```
 
 Requires running: `perception-voice` (with the `subscribe` streaming
-interface, deployed), `voice serve` (presence-voice v2), lm-studio on
-:1234 with `google/gemma-4-26b-a4b-qat` loaded.
+interface, deployed), `voice serve` (presence-voice v2), llama-server or
+LM Studio on :1234 with `google/gemma-4-12b-qat` loaded (`FAV_LOCAL_LLM`).
 
 ## config.yaml
 
@@ -70,8 +72,10 @@ without touching the file — the env var always wins when set.
 | `ADA_VOICE` | `config.yaml`'s `voice`, else `ada` (presence-voice preset) |
 | `ADA_MODEL` | `$FAV_LOCAL_LLM` |
 | `ADA_WAKE` | `\bada\b` |
-| `ADA_CONV_WINDOW_MS` | `8000` |
+| `ADA_LISTEN_TIMEOUT` | `6` (seconds to wait for speech to *start* on `listen`) |
+| `ADA_MAX_TURNS` | `config.yaml` `max_turns`, else `20` (agl rounds per run; also passed into brain think/ontology) |
 | `ADA_BACK_SOCK` | `$XDG_RUNTIME_DIR/ada-back.sock` |
+| `ADA_VOICE_SOCK` | `$XDG_RUNTIME_DIR/ada-voice.sock` (home MCP `listen` shim) |
 | `ADA_SOUL` | `SOUL.md` (repo root) — standing knowledge loaded into her system prompt at startup |
 | `ADA_CONFIG` | `config.yaml` (repo root) |
 | `ADA_SELFTEST` | unset — set to a phrase to run one synthetic turn (no mic) |

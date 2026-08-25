@@ -12,18 +12,14 @@ voice_tom: michael
 # Private brain graph (gitignored; nested git inside). Absolute path to db/.
 brain_path: /workspace/ada/db
 
-# Soft cap on recent conversation turns kept for prompt context.
-# Token-aware compaction may drop more under context.max_tokens.
-history_max: 48
+# Provider inference rounds per Agent.run (Angela + nested brain
+# think/ontology via ADA_MAX_TURNS on the brain MCP child). AGL default is 5.
+max_turns: 20
 
-# Gemma-4 ~120K context window (PLAN2 W7).
-# Context is also written to a YAML log (gl1 Lucy/Rosa style) that **persists
-# across ada-back restarts**. Compaction ring-trims and logrotates into
-# logs/ada.archive.yaml — we do not wipe the log on process start.
+# Token reserve when line-compacting the immortal Angela session
+# (near live n_ctx from agl). Context lives in .angela/sessions/.
 context:
-  max_tokens: 120000
   compact_reserve_tokens: 8000
-  # log: /workspace/ada/logs/ada.yaml   # default: <ada-root>/logs/ada.yaml
 
 # Shared task list (M2 — path locked; todo MCP later).
 task_lists:
@@ -59,10 +55,3 @@ planner:
   volunteer_interval_ms: 3600000
   timeout_ms: 90000
   # list: shared   # optional override; default task_lists.shared
-
-# Diary interval (M7; also scheduled via crony → ada diary).
-# Input corpus = logs/ada.archive.yaml (period) ∪ logs/ada.yaml (live window).
-# See back/lib/ctx-log.coffee collectDiaryCorpus — never diary from one file alone.
-diary:
-  interval: 4h
-  # watermark_file: /workspace/ada/logs/diary.watermark  # last successful run (ISO)

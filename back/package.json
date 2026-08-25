@@ -5,6 +5,7 @@
   "private": true,
   "dependencies": {
     "agl-ai": "file:../../agl",
+    "angela": "file:../../angela",
     "bun-coffeescript": "^1.0.3",
     "js-yaml": "^4.1.0",
     "@modelcontextprotocol/sdk": "^1.7.0"

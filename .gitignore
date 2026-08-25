@@ -14,7 +14,10 @@ zig-pkg/
 /brain.yaml
 # Secrets (mintty/auth later)
 .env
-# Structured agent logs (diary map-reduce input; local only)
+# Structured agent logs (local only)
 /logs/
+# Angela session jsonl (immortal context; local only)
+/.angela/sessions/
+/.angela/ada-session
 # Instance lock / sockets
 .back.lock

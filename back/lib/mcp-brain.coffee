@@ -1,9 +1,9 @@
 # Bridges brain's MCP tools into agl-ai: one agent.Tool per brain tool,
 # prefixed brain_* so they don't collide with other Ada tools.
 #
-# `brain mcp` is a thin stdio adapter and requires a live `brain server`
-# (that process owns pglite). Ada starts both as her own instance, pinned
-# with `brain --use ada` so other shells can `brain use` freely.
+# `brain mcp` is a thin stdio adapter over `brain server` (pglite owner).
+# The MCP adapter auto-starts the server on connect and on each tool call
+# if it is down. Ada still warms it here so the first turn is not a stall.
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { spawn as spawnProcess } from 'node:child_process'
@@ -59,8 +59,23 @@ export resolveAdaBrain = (opts = {}) ->
   root = opts.root or process.env.BRAIN_ROOT or process.env.ADA_BRAIN or "#{cwd}/db"
   { alias: null, cwd, root }
 
+pidAlive = (pid) ->
+  try
+    process.kill pid, 0
+    true
+  catch
+    false
+
+# Live PID + sock (a leftover .sock after a crash is not "running").
 isBrainServerRunning = (root) ->
-  existsSync join(root, '.sock')
+  sock = join root, '.sock'
+  lockFile = join root, '.lock'
+  return false unless existsSync(sock) and existsSync(lockFile)
+  try
+    pid = JSON.parse(readFileSync(lockFile, 'utf8')).pid
+    pid and pidAlive(pid)
+  catch
+    false
 
 # Pin this child to an alias via `brain --use` so a later `brain use` in
 # another shell cannot retarget Ada's server/mcp. Does not persist.
@@ -141,9 +156,9 @@ connectBrainMcp = (brainCmd, cwd, root, alias, env) ->
   true
 
 export ensureBrainMcp = (opts = {}) ->
-  return true if client and tools.length
-
   { cwd, root, alias } = resolveAdaBrain(opts)
+  return true if client and tools.length and isBrainServerRunning(root)
+
   brainCmd = opts.command or process.env.ADA_BRAIN_CMD or 'brain'
   env = childEnv root, alias
 

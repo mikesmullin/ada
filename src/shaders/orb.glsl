@@ -16,7 +16,7 @@ void main() {
 layout(binding=0) uniform fs_params {
     vec4 res_time;  // x: width, y: height, z: time (s), w: press 0..1
     vec4 states_a;  // x: idle, y: listening, z: active, w: thinking
-    vec4 states_b;  // x: speaking, y: brain-connected, z,w: unused
+    vec4 states_b;  // x: speaking, y: brain-connected, z: ear 0/1/2, w: ear remain 0..1
     vec4 user_a;    // x: rms, yzw: band 0..2      (mic / the user)
     vec4 user_b;    // x: band 3, y: attack env, z: vad, w: unused
     vec4 ada_a;     // x: rms, yzw: band 0..2      (tts / ada)
@@ -68,6 +68,8 @@ void main() {
     float w_think  = states_a.w;
     float w_speak  = states_b.x;
     float connected = states_b.y;
+    float ear_phase = states_b.z; // 0 off, 1 start-wait, 2 hold/silence
+    float ear_t     = states_b.w; // remaining fraction 0..1
 
     float u_rms = user_a.x;
     vec4  u_band = vec4(user_a.yzw, user_b.x);
@@ -154,6 +156,56 @@ void main() {
     // ---- compose --------------------------------------------------------
     vec3 bg = vec3(0.026, 0.028, 0.045); // v1: opaque dark; transparency later
     vec3 col = bg + core_out + halo_out + think_out + ring_out;
+
+    // ---- ear rec/fuse ------------------------------------------------------
+    if (ear_phase > 0.5) {
+        float p = ear_phase;
+        float is_armed   = step(0.5, p) * (1.0 - step(1.5, p));
+        float is_start   = step(1.5, p) * (1.0 - step(2.5, p));
+        float is_smiss   = step(2.5, p) * (1.0 - step(3.5, p));
+        float is_finish  = step(3.5, p) * (1.0 - step(4.5, p));
+        float is_fmiss   = step(4.5, p) * (1.0 - step(5.5, p));
+        float is_got     = step(5.5, p) * (1.0 - step(6.5, p));
+        float is_barge   = step(6.5, p);
+        float timed = is_start + is_finish;
+
+        vec3 rec_col = vec3(0.35, 0.85, 1.00) * is_armed
+                     + vec3(1.00, 0.55, 0.12) * (is_start + is_smiss)
+                     + vec3(1.00, 0.12, 0.10) * (is_finish + is_fmiss)
+                     + vec3(0.55, 1.00, 0.70) * is_got
+                     + vec3(1.00, 0.95, 0.85) * is_barge;
+
+        float blink = mix(0.55 + 0.45 * (0.5 + 0.5 * sin(t * 2.2)), 1.0,
+                          is_finish + is_got + is_barge);
+        blink = mix(blink, step(0.42, fract(t * 1.6)), is_start);
+
+        vec2 rec_uv = vec2(0.78, 0.78);
+        float rec_d = length(uv - rec_uv);
+        float pip_r = mix(0.038, 0.028, is_smiss + is_fmiss);
+        float pip = smoothstep(pip_r + 0.034, pip_r, rec_d);
+        float rec_halo = exp(-rec_d * rec_d * 380.0);
+        float gain = mix(0.55, 1.15, is_got + is_barge);
+        gain *= mix(1.0, 0.45, is_smiss + is_fmiss);
+        col += rec_col * (pip * 1.2 + rec_halo * 0.5) * (0.30 + 0.70 * blink) * gain;
+
+        float fuse_r = 0.92;
+        float fuse = exp(-pow((r - fuse_r) * 70.0, 2.0));
+        if (timed > 0.5) {
+            float ang01 = fract(0.25 - theta / 6.28318531);
+            float lit = step(ang01, max(ear_t, 0.0));
+            col += rec_col * fuse * lit * (0.50 + 0.55 * ear_t);
+            float head = 1.0 - smoothstep(0.0, 0.03, abs(ang01 - ear_t));
+            col += rec_col * fuse * head * 1.4;
+        }
+        if (is_smiss + is_fmiss > 0.5) {
+            col += rec_col * fuse * 0.28;
+        }
+        if (is_got + is_barge > 0.5) {
+            float ping = exp(-fract(t * 7.0) * 6.0);
+            float pr = 0.55 + 0.20 * ping;
+            col += rec_col * exp(-pow((r - pr) * 50.0, 2.0)) * ping * (0.8 + 1.2 * is_barge);
+        }
+    }
 
     // gentle tone-map so stacked layers don't clip harshly
     col = col / (1.0 + col * 0.35);

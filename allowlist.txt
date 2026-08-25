@@ -2,13 +2,15 @@
 # Format (gl1 Lucy/Rosa): one rule per line — `tool` or `tool:params`
 # `*` wildcards ok. Lines starting with # are comments.
 #
-# Stance (PLAN2): home + brain + shared todo OK; no work-laptop corpus.
-# Until Tom (M4) is enabled, only allowlisted tools run.
+# House tools are unprefixed (home MCP prefix:false).
+# Brain/todo use Angela server__tool names.
+# Medium/high-risk tools are omitted so they go through Tom (ask mode).
 
-# -- sensors / trivial --------------------------------------------------------
+# -- sensors / listen -------------------------------------------------------
 current_time
+listen
 
-# -- home -------------------------------------------------------------------
+# -- home (low) -------------------------------------------------------------
 desk_light
 pc_light_color
 alarm__create
@@ -21,32 +23,23 @@ timer__create
 timer__dismiss
 timer__show
 media_control
-run_application
-run_activity_command
 
-# -- browser (medium risk; allowlisted for now so Ada can still help) -------
-control_browser
+# -- angela builtins --------------------------------------------------------
+goto
+loop_start_marker
 
-# -- long-term memory (brain MCP + wrappers) --------------------------------
-remember_fact
-recall_search
-brain_search
-brain_think
-brain_ontology
-brain_graph
-brain_graphql
-brain_get_entity
-brain_put_entity
-brain_delete_entity
-brain_schema_methods
-brain_method_invoke
-brain_schema_orphans
+# -- brain reads ------------------------------------------------------------
+brain__search
+brain__think
+brain__ontology
+brain__graph
+brain__graphql
+brain__get_entity
+brain__schema_methods
+brain__schema_orphans
 
-# -- tasks (todo MCP) -------------------------------------------------------
-todo_lists
-todo_next
-todo_tree
-todo_view
-todo_take
-todo_release
-todo_upsert
+# -- todo reads -------------------------------------------------------------
+todo__lists
+todo__next
+todo__tree
+todo__view

@@ -63,6 +63,11 @@ const Targets = struct {
     /// the frames are the playback clock, and they open the speaking gate
     /// directly (see frame()).
     ada_last_audible: f64 = -10,
+    /// Active-listen rec/fuse (snapped, not smoothed):
+    /// 0 off, 1 armed, 2 start-clock, 3 start-empty, 4 finish-clock,
+    /// 5 finish-empty, 6 got-utterance, 7 barge-in. ear_remain is 0..1 fuse.
+    ear_phase: f32 = 0,
+    ear_remain: f32 = 0,
 };
 
 /// Render-thread-only smoothed copies of Targets.
@@ -79,6 +84,8 @@ const Smooth = struct {
     user_last_rms: f32 = 0,
     ada_last_rms: f32 = 0,
     press: f32 = 0,
+    ear_phase: f32 = 0,
+    ear_remain: f32 = 0,
 };
 
 const G = struct {
@@ -345,6 +352,8 @@ const StateMsg = struct {
     speaking: bool = false,
     who: []const u8 = "",
     text: []const u8 = "",
+    ear: f64 = 0,
+    ear_t: f64 = 0,
 };
 
 fn spawnCaption(text: []const u8) void {
@@ -383,6 +392,8 @@ fn handleBackLine(line: []const u8) void {
     G.targets.active = if (msg.active) 1 else 0;
     G.targets.thinking = if (msg.thinking) 1 else 0;
     G.targets.speaking = if (msg.speaking) 1 else 0;
+    G.targets.ear_phase = @floatCast(msg.ear);
+    G.targets.ear_remain = @floatCast(msg.ear_t);
 }
 
 fn backThread() void {
@@ -437,6 +448,8 @@ fn setConnected(ok: bool) void {
         G.targets.active = 0;
         G.targets.thinking = 0;
         G.targets.speaking = 0;
+        G.targets.ear_phase = 0;
+        G.targets.ear_remain = 0;
         // leave caption particles to age out on their own
     }
 }
@@ -612,6 +625,8 @@ export fn frame() void {
         tgt.user = G.targets.user;
         tgt.ada = G.targets.ada;
         tgt.ada_last_audible = G.targets.ada_last_audible;
+        tgt.ear_phase = G.targets.ear_phase;
+        tgt.ear_remain = G.targets.ear_remain;
     }
 
     // Her actual audio opens the speaking gate (playback truth beats the
@@ -653,6 +668,9 @@ export fn frame() void {
 
     const press_target: f32 = if (G.press_started >= 0) 1.0 else 0.0;
     s.press = approach(s.press, press_target, dt, 0.04, 0.15);
+    // Countdown must snap — smoothing would lie about remaining time.
+    s.ear_phase = tgt.ear_phase;
+    s.ear_remain = tgt.ear_remain;
 
     // idle recedes as any engaged state rises
     const engaged = @max(s.active, @max(s.thinking, s.speaking));
@@ -661,7 +679,7 @@ export fn frame() void {
     const params = shd.FsParams{
         .res_time = .{ sapp.widthf(), sapp.heightf(), @floatCast(now), s.press },
         .states_a = .{ w_idle, s.listening, s.active, s.thinking },
-        .states_b = .{ s.speaking, s.connected, 0, 0 },
+        .states_b = .{ s.speaking, s.connected, s.ear_phase, s.ear_remain },
         .user_a = .{ s.user.rms, s.user.band[0], s.user.band[1], s.user.band[2] },
         .user_b = .{ s.user.band[3], s.user_env, s.user.vad, 0 },
         .ada_a = .{ s.ada.rms, s.ada.band[0], s.ada.band[1], s.ada.band[2] },
