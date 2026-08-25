@@ -13,6 +13,9 @@
         skip_taskbar = true,
         border_width = 0,
         titlebars_enabled = false,
+        -- Don't take keyboard focus. Mouse PTT still works; without this,
+        -- a click focuses the orb and voice-keyboard STT types into it.
+        focusable = false,
         -- biggest screen by default (plan §9.7); adjust to taste
         screen = function() return screen.primary end,
         placement = function(c)

@@ -763,7 +763,14 @@ export fn event(ev: [*c]const sapp.Event) void {
             if (held < 0.25) sendBack("{\"ev\":\"click\"}"); // cancel/dismiss
         },
         .KEY_DOWN => switch (e.key_code) {
-            .ESCAPE, .Q => {
+            // Escape always quits. Q is --solo only: a letter key in
+            // production closes the orb whenever STT/voice-keyboard (or
+            // any focused typing) emits q — "question", "quite", etc.
+            .ESCAPE => {
+                sendBack("{\"ev\":\"quit\"}");
+                sapp.requestQuit();
+            },
+            .Q => if (G.opts.solo) {
                 sendBack("{\"ev\":\"quit\"}");
                 sapp.requestQuit();
             },
@@ -802,7 +809,7 @@ export fn event(ev: [*c]const sapp.Event) void {
 }
 
 export fn cleanup() void {
-    // Window close / normal sokol teardown (titlebar X, q/esc quit path).
+    // Window close / normal sokol teardown (titlebar X, esc quit path).
     releaseInstanceLock();
     if (G.font.ok) G.font.deinit();
     sg.shutdown();

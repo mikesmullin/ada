@@ -130,4 +130,6 @@ Press-and-hold semantics: the avatar sends `ptt down:true` on left-button
 press immediately (latency), `down:false` on release; if the hold was
 shorter than 250 ms it also sends `click` — the back treats a sub-250 ms
 PTT window with no speech as a no-op, and `click` cancels any pending or
-speaking turn (whisper-style cancel-before-commit).
+speaking turn (whisper-style cancel-before-commit). A real hold lasts
+exactly as long as LMB is down: VAD silence and listen start/finish
+clocks do not commit while the button is held; LMB-up is end-of-utterance.

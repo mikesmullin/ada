@@ -255,6 +255,7 @@ pttDown = false
 pttIntervals = [] # {down, up} unix seconds, recent only
 pttSquelchTimer = null
 PTT_HOLD_MS = 250 # must match avatar short-click threshold
+pttBuf = createTranscriptBuf()
 listenSession = null
 listenEpoch = 0
 earJobs = []
@@ -302,8 +303,10 @@ onAvatarEvent = (ev) ->
       now = Date.now() / 1000
       if ev.down and not pttDown
         pttDown = true
+        pttBuf = createTranscriptBuf()
         pttIntervals.push { down: now, up: null }
         setState active: true
+        listenSession?.setHeld true
         # Delay listen-on until this is a real hold. A short click also sends
         # ptt down/up; playing squelch here made cancel play both sfx.
         clearTimeout pttSquelchTimer if pttSquelchTimer
@@ -320,9 +323,22 @@ onAvatarEvent = (ev) ->
         pttDown = false
         pttIntervals.at(-1).up = now
         pttIntervals.shift() while pttIntervals.length > 8
+        listenSession?.setHeld false
         # Hold release: listen-off. Short click: click handler plays it once.
         sfx 'click-off' if held
-        maybeIdle()
+        text = snapshotText pttBuf
+        pttBuf = createTranscriptBuf()
+        # Walkie-talkie: LMB-up is end-of-utterance. Do not let VAD or
+        # listen start/finish clocks commit while the button is down.
+        if held and listenSession?
+          had = Boolean snapshotText listenSession.buf
+          listenSession.commit()
+          pttIntervals.at(-1).committed = true if had
+        else if held and text
+          pttIntervals.at(-1).committed = true
+          runTurn { text, t_end: now }, 'ptt'
+        else
+          maybeIdle()
     when 'click'
       if listenSession?
         log 'click: cancel listen'
@@ -735,6 +751,9 @@ onWordsEvent = (msg) ->
     if listenSession?
       listenSession.feedPartial msg.text or '', micSpeaking
       return
+    if pttDown
+      feedPartial pttBuf, msg.text or '', micSpeaking
+      return
     if tomIsWaiting()
       setState active: true
       return
@@ -763,6 +782,20 @@ onWordsEvent = (msg) ->
     if listenSession?
       listenSession.feedUtterance msg.text or ''
       return
+    # PTT hold: VAD may emit utterances (0.6s silence) but LMB-up is
+    # end-of-utterance. Buffer until release so a pause does not start
+    # a turn mid-hold.
+    if pttDown
+      gatherFeedUtterance pttBuf, msg.text or ''
+      return
+    # Late STT for a hold we already committed (VAD finalized after LMB-up).
+    if msg.t_start?
+      tEnd = msg.t_end or Date.now() / 1000
+      for iv in pttIntervals when iv.committed
+        up = iv.up ? Date.now() / 1000
+        if iv.down <= tEnd + CFG.slopSec and up >= msg.t_start - CFG.slopSec
+          log "(ptt echo) #{msg.text}"
+          return
     if gathering and gatherCancelled
       log "(cancelled gather) #{msg.text}"
       gathering = false
@@ -1002,6 +1035,7 @@ armEar = (job) ->
         catch e then null
       log "listen done ok=#{result.ok} reason=#{result.reason or ''} #{text.slice 0, 80}"
   listenSession = sess
+  sess.setHeld true if pttDown
   # Chime + start-timeout wait for her playback to actually end. The ear
   # is already capturing STT so a barge-in can land while she talks.
   do ->

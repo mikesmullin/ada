@@ -138,8 +138,9 @@ export snapshotText = (buf) ->
 
 # One in-flight listen session.
 # The ear opens immediately. Start-timeout only after releaseStartClock()
-# (Ada finished vocalizing). Finish-timeout only after the STT buffer
-# actually grows — VAD/gain is not the gate.
+# (Ada finished vocalizing). Finish-timeout is armed only when the STT
+# buffer grows — VAD/gain does not open it. Once armed, live mic energy
+# holds the silence debounce so Whisper lag cannot end the turn mid-speech.
 export createListenSession = ({ timeoutSec, onStart, onEnd, onTick, log } = {}) ->
   startMs = Math.max 500, Math.round((Number(timeoutSec) or DEFAULT_START_MS / 1000) * 1000) or DEFAULT_START_MS
   session =
@@ -151,6 +152,8 @@ export createListenSession = ({ timeoutSec, onStart, onEnd, onTick, log } = {}) 
     silenceMs: SILENCE_MS
     buf: createTranscriptBuf()
     done: false
+    held: false
+    heldSince: null
     resolve: null
     reject: null
     timer: null
@@ -160,7 +163,10 @@ export createListenSession = ({ timeoutSec, onStart, onEnd, onTick, log } = {}) 
 
   session.hud = ->
     now = Date.now()
-    if session.heardWords
+    # PTT hold: no fuse. Clocks pause until LMB up.
+    if session.held
+      { phase: 1, remain: 1, total: 0 }
+    else if session.heardWords
       remain = Math.max 0, SILENCE_MS - (now - (session.lastWordAt or now))
       { phase: 4, remain, total: SILENCE_MS }
     else if session.startClockAt?
@@ -205,6 +211,9 @@ export createListenSession = ({ timeoutSec, onStart, onEnd, onTick, log } = {}) 
 
   session.advance = (now) ->
     return if session.done
+    if session.held
+      emitTick()
+      return
     if not session.heardWords and session.startClockAt? and
         (now - session.startClockAt) >= startMs
       finish { ok: false, reason: 'timeout', text: '' }
@@ -219,7 +228,41 @@ export createListenSession = ({ timeoutSec, onStart, onEnd, onTick, log } = {}) 
       return
     emitTick()
 
-  session.tickLevels = -> session.advance Date.now()
+  # Pause start/finish clocks for the duration of a PTT hold so LMB, not
+  # VAD or listen timeouts, is end-of-utterance. Hold time is added back
+  # onto the clocks so it does not eat the budget.
+  session.setHeld = (held) ->
+    return if session.done
+    now = Date.now()
+    next = Boolean held
+    if next and not session.held
+      session.held = true
+      session.heldSince = now
+      log? 'ear: PTT hold — clocks paused'
+    else if not next and session.held
+      dt = now - (session.heldSince or now)
+      session.held = false
+      session.heldSince = null
+      session.startClockAt += dt if session.startClockAt?
+      session.lastWordAt += dt if session.lastWordAt
+      log? 'ear: PTT release — clocks resumed'
+    emitTick()
+
+  # LMB-up end-of-utterance: finish now if we have text. Empty hold is a
+  # no-op (start-timeout keeps running).
+  session.commit = ->
+    return if session.done
+    text = snapshotText session.buf
+    return unless text
+    noteWords()
+    finish { ok: true, reason: 'ok', text }
+
+  session.tickLevels = (frame) ->
+    now = Date.now()
+    if not session.held and session.heardWords and
+        (frame?.speaking or speakingFromFrame(frame))
+      session.lastWordAt = now
+    session.advance now
 
   session.feedPartial = (text, speaking) ->
     return if session.done
