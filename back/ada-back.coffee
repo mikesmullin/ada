@@ -1170,7 +1170,7 @@ main = ->
     args: ['--use', CFG.brainAlias, 'mcp']
     cwd: CFG.brainCwd
     env:
-      ADA_MAX_TURNS: String(CFG.maxTurns)
+      BRAIN_MAX_TURNS: String(CFG.maxTurns)
   if todoOk
     mcp.push
       name: 'todo'

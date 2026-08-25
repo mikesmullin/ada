@@ -13,7 +13,7 @@ voice_tom: michael
 brain_path: /workspace/ada/db
 
 # Provider inference rounds per Agent.run (Angela + nested brain
-# think/ontology via ADA_MAX_TURNS on the brain MCP child). AGL default is 5.
+# think/ontology via BRAIN_MAX_TURNS on the brain MCP child). AGL default is 5.
 max_turns: 20
 
 # Token reserve when line-compacting the immortal Angela session
