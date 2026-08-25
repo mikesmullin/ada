@@ -1169,8 +1169,6 @@ main = ->
     command: process.env.ADA_BRAIN_CMD or 'brain'
     args: ['--use', CFG.brainAlias, 'mcp']
     cwd: CFG.brainCwd
-    env:
-      BRAIN_MAX_TURNS: String(CFG.maxTurns)
   if todoOk
     mcp.push
       name: 'todo'

@@ -73,7 +73,7 @@ without touching the file — the env var always wins when set.
 | `ADA_MODEL` | `$FAV_LOCAL_LLM` |
 | `ADA_WAKE` | `\bada\b` |
 | `ADA_LISTEN_TIMEOUT` | `6` (seconds to wait for speech to *start* on `listen`) |
-| `ADA_MAX_TURNS` | `config.yaml` `max_turns`, else `20` (agl rounds per run; forwarded to brain MCP as `BRAIN_MAX_TURNS`) |
+| `ADA_MAX_TURNS` | `config.yaml` `max_turns`, else `20` (agl rounds per Ada `session.run`) |
 | `ADA_BACK_SOCK` | `$XDG_RUNTIME_DIR/ada-back.sock` |
 | `ADA_VOICE_SOCK` | `$XDG_RUNTIME_DIR/ada-voice.sock` (home MCP `listen` shim) |
 | `ADA_SOUL` | `SOUL.md` (repo root) — standing knowledge loaded into her system prompt at startup |
