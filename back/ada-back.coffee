@@ -39,6 +39,7 @@ import {
   feedPartial, feedUtterance as gatherFeedUtterance, snapshotText
 } from './lib/listen.coffee'
 import { compactContextWindow } from './lib/compact.coffee'
+import { registerAdaLocalTools } from './lib/ada-tools.coffee'
 
 # UX wrap only (announce caption + long-tool progress). Allowlist + Tom live
 # in Angela PolicyEngine (onApproval).
@@ -553,7 +554,7 @@ class SentenceSplitter
     @onSentence rest if rest
 
 # ---------------------------------------------------------------------------
-# Turn engine (tools live on Angela MCP — back/mcp/home + brain + todo)
+# Turn engine (tools live on Angela MCP — mcp-home + brain + todo)
 
 
 # SOUL.md: standing knowledge (who Mike is, preferences, facts) appended
@@ -1160,17 +1161,15 @@ main = ->
   log if todoOk then "todo mcp ready (#{CFG.taskShared})" else 'todo mcp unavailable'
 
   bun = process.execPath
+  homeMcp = process.env.ADA_HOME_MCP or '/workspace/mcp-home/server.coffee'
   mcp = [
     name: 'home'
     prefix: false
     command: bun
-    args: [join ADA_ROOT, 'back/mcp/home/server.coffee']
-    cwd: join ADA_ROOT, 'back'
+    args: [homeMcp]
+    cwd: process.env.ADA_HOME_MCP_CWD or '/workspace/mcp-home'
     env:
       ADA_ACTIVITY_DIR: CFG.activityDir
-      ADA_VOICE_SOCK: CFG.voiceSock
-      ADA_MODEL: CFG.model
-      FAV_LOCAL_LLM: CFG.model
   ]
   mcp.push
     name: 'brain'
@@ -1204,6 +1203,7 @@ main = ->
 
   adaSession = await openOrCreateSession adaHarness
   await adaSession.listToolCatalog()
+  registerAdaLocalTools adaSession.agent, voiceSock: CFG.voiceSock
   wrapToolsForUx adaSession.agent if adaSession.agent
   log "angela tools: #{Object.keys(adaSession.agent?.tools or {}).join ', '}"
 

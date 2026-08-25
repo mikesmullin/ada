@@ -23,8 +23,9 @@ Design doc: [docs/PLAN.md](docs/PLAN.md) · wire spec: [docs/PROTOCOL.md](docs/P
 - **`back/ada-back.coffee`** (Bun CoffeeScript + **Angela** + agl-ai) — the
   conversation loop: perception-voice words stream → wake/PTT gate (or
   `listen` tool) → Angela `session.run` (retained context in
-  `.angela/sessions/`) → per-sentence TTS. House tools are an MCP stdio
-  server (`back/mcp/home`); brain and todo are existing MCP servers.
+  `.angela/sessions/`) → per-sentence TTS. House tools are the standalone
+  MCP stdio server [`mcp-home`](/workspace/mcp-home); brain and todo are
+  existing MCP servers. `listen` and `control_browser` stay on Ada.
 
 ## Run
 
@@ -80,7 +81,8 @@ without touching the file — the env var always wins when set.
 | `ADA_LISTEN_TIMEOUT` | `6` (seconds to wait for speech to *start* on `listen`) |
 | `ADA_MAX_TURNS` | `config.yaml` `max_turns`, else `20` (agl rounds per Ada `session.run`) |
 | `ADA_BACK_SOCK` | `$XDG_RUNTIME_DIR/ada-back.sock` |
-| `ADA_VOICE_SOCK` | `$XDG_RUNTIME_DIR/ada-voice.sock` (home MCP `listen` shim) |
+| `ADA_VOICE_SOCK` | `$XDG_RUNTIME_DIR/ada-voice.sock` (`listen` tool shim) |
+| `ADA_HOME_MCP` | `/workspace/mcp-home/server.coffee` |
 | `ADA_SOUL` | `SOUL.md` (repo root) — standing knowledge loaded into her system prompt at startup |
 | `ADA_CONFIG` | `config.yaml` (repo root) |
 | `ADA_SELFTEST` | unset — set to a phrase to run one synthetic turn (no mic) |
