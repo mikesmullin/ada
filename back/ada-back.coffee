@@ -19,6 +19,7 @@ import yaml from 'js-yaml'
 import net from 'node:net'
 import { dirname, join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
+import { execFileSync } from 'node:child_process'
 import { spawn } from './lib/spawn.coffee'
 import { initBrowserAgent } from './ada-browser.coffee'
 import { ensureBrainMcp, resolveAdaBrain } from './lib/mcp-brain.coffee'
@@ -571,6 +572,27 @@ loadSoul = ->
     ''
 
 SYSTEM_PROMPT = loadSoul()
+
+soulDate = ->
+  new Date().toLocaleString 'en-US',
+    weekday: 'long'
+    year: 'numeric'
+    month: 'long'
+    day: 'numeric'
+    hour: 'numeric'
+    minute: '2-digit'
+    timeZoneName: 'long'
+
+soulUname = ->
+  try
+    execFileSync('uname', ['-a'], encoding: 'utf8').trim()
+  catch
+    ''
+
+soulLocals = ->
+  date: soulDate()
+  uname: soulUname()
+  shell: process.env.SHELL or ''
 
 currentTurn = null
 turnCounter = 0
@@ -1185,10 +1207,12 @@ main = ->
         TODO_SHARED: CFG.taskShared
         TODO_DEFAULT_LIST: 'shared'
 
+  locals = soulLocals()
   adaHarness = await Angela.create
     projectRoot: ADA_ROOT
     model: CFG.model
     system: SYSTEM_PROMPT
+    locals: locals
     retain_history: true
     stream: true
     parallel_tools: true

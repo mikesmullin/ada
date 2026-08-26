@@ -83,7 +83,7 @@ without touching the file — the env var always wins when set.
 | `ADA_BACK_SOCK` | `$XDG_RUNTIME_DIR/ada-back.sock` |
 | `ADA_VOICE_SOCK` | `$XDG_RUNTIME_DIR/ada-voice.sock` (`listen` tool shim) |
 | `ADA_HOME_MCP` | `/workspace/mcp-home/server.coffee` |
-| `ADA_SOUL` | `SOUL.md` (repo root) — standing knowledge loaded into her system prompt at startup |
+| `ADA_SOUL` | `SOUL.md` (repo root) — standing knowledge loaded into her system prompt at startup; `{{date}}` `{{uname}}` `{{shell}}` interpolated via agl `locals` |
 | `ADA_CONFIG` | `config.yaml` (repo root) |
 | `ADA_SELFTEST` | unset — set to a phrase to run one synthetic turn (no mic) |
 
