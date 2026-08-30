@@ -172,7 +172,7 @@ CFG =
     '/workspace/perception-voice/perception.sock'
   presenceSock: process.env.ADA_PRESENCE_SOCK or '/tmp/presence-voice.sock'
   voice: process.env.ADA_VOICE or config.voice or 'ada'
-  model: process.env.ADA_MODEL or process.env.FAV_LOCAL_LLM
+  model: process.env.ADA_MODEL or ''
   wake: new RegExp(process.env.ADA_WAKE or '\\bada\\b', 'i')
   activityDir: process.env.ADA_ACTIVITY_DIR or '/workspace/mari/activity'
   sfxDir: new URL('../sfx/', import.meta.url).pathname
@@ -1164,7 +1164,7 @@ main = ->
       sock.on 'error', reject
   catch e
     console.error "error: presence-voice daemon is not reachable (unix://#{CFG.presenceSock})"
-    console.error '       start it: systemctl --user start voice'
+    console.error '       start it: systemctl --user start presence-voice'
     process.exit 1
 
   # optional: the browser sub-agent, only if mcp-zen is running

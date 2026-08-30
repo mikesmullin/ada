@@ -157,10 +157,7 @@ main = ->
     process.exit 0
 
   config = loadConfig()
-  model = process.env.ADA_MODEL or process.env.FAV_LOCAL_LLM or config.model
-  unless model
-    console.error 'error: no model (set ADA_MODEL or FAV_LOCAL_LLM)'
-    process.exit 1
+  model = process.env.ADA_MODEL or config.model or ''
 
   voice = process.env.ADA_VOICE or config.voice or 'nova'
   presenceSock = process.env.ADA_PRESENCE_SOCK or '/tmp/presence-voice.sock'

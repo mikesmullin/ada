@@ -9,7 +9,7 @@ module.exports = (ctx) ->
   root = ctx.projectRoot or '/workspace/ada'
   name: 'ada'
   description: 'Always-on voice companion on the home PC'
-  # model omitted — FAV_LOCAL_LLM / Angela default; ctx window from agl
+  # model omitted — AGL ~/.config/agl/config.yaml default_model; ctx window from agl
   policyMode: 'ask'
   parallel_tools: true
   max_turns: Number(process.env.ADA_MAX_TURNS or 20)

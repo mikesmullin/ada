@@ -61,7 +61,7 @@ systemctl --user daemon-reload && systemctl --user enable --now ada-back
 
 Requires running: `perception-voice` (with the `subscribe` streaming
 interface, deployed), `voice serve` (presence-voice v2), llama-server or
-LM Studio on :1234 with `google/gemma-4-12b-qat` loaded (`FAV_LOCAL_LLM`).
+LM Studio / llama-server on :1234 with the model in `~/.config/agl/config.yaml` (`default_model`).
 
 ## config.yaml
 
@@ -77,7 +77,7 @@ without touching the file — the env var always wins when set.
 | var | default |
 |---|---|
 | `ADA_VOICE` | `config.yaml`'s `voice`, else `ada` (presence-voice preset) |
-| `ADA_MODEL` | `$FAV_LOCAL_LLM` |
+| `ADA_MODEL` | AGL `~/.config/agl/config.yaml` `default_model` |
 | `ADA_WAKE` | `\bada\b` |
 | `ADA_LISTEN_TIMEOUT` | `6` (seconds to wait for speech to *start* on `listen`) |
 | `ADA_MAX_TURNS` | `config.yaml` `max_turns`, else `20` (agl rounds per Ada `session.run`) |
