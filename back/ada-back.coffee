@@ -555,7 +555,7 @@ class SentenceSplitter
     @onSentence rest if rest
 
 # ---------------------------------------------------------------------------
-# Turn engine (tools live on Angela MCP — mcp-home + brain + todo)
+# Turn engine (tools live on Angela MCP — mcp-home + mcp-work + brain + todo)
 
 
 # SOUL.md: standing knowledge (who Mike is, preferences, facts) appended
@@ -1184,6 +1184,8 @@ main = ->
 
   bun = process.execPath
   homeMcp = process.env.ADA_HOME_MCP or '/workspace/mcp-home/server.coffee'
+  workMcp = process.env.ADA_WORK_MCP or '/workspace/mcp-work/server.coffee'
+  sandboxMcp = process.env.ADA_SANDBOX_MCP or '/workspace/mcp/sandbox/server.mjs'
   mcp = [
     name: 'home'
     prefix: false
@@ -1192,6 +1194,23 @@ main = ->
     cwd: process.env.ADA_HOME_MCP_CWD or '/workspace/mcp-home'
     env:
       ADA_ACTIVITY_DIR: CFG.activityDir
+  ,
+    name: 'work'
+    prefix: false
+    command: bun
+    args: [workMcp]
+    cwd: process.env.ADA_WORK_MCP_CWD or '/workspace/mcp-work'
+  ,
+    name: 'sandbox'
+    prefix: false
+    command: bun
+    args: [sandboxMcp]
+    cwd: process.env.ADA_SANDBOX_MCP_CWD or '/workspace/mcp/sandbox'
+    env:
+      SANDBOX_API: process.env.SANDBOX_API or 'http://127.0.0.1:8080'
+      NAMESPACE: process.env.NAMESPACE or 'agent-desktop'
+      ADA_SANDBOX_TASKS: process.env.ADA_SANDBOX_TASKS or
+        join(ADA_ROOT, '.angela/sandbox-tasks.json')
   ]
   mcp.push
     name: 'brain'

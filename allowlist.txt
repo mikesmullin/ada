@@ -3,6 +3,9 @@
 # `*` wildcards ok. Lines starting with # are comments.
 #
 # House tools are unprefixed (home MCP prefix:false).
+# Work tools are unprefixed (work MCP prefix:false) and omitted so Tom
+# gates them (power / password / Duo / KVM).
+# `shutdown` (home) is omitted so Tom gates powering off this PC.
 # Brain/todo use Angela server__tool names.
 # Medium/high-risk tools are omitted so they go through Tom (ask mode).
 
@@ -43,3 +46,8 @@ todo__lists
 todo__next
 todo__tree
 todo__view
+
+# -- sandbox collective (low). spawn / message / cancel go through Tom ------
+agents_discover
+agents_status
+agents_wait

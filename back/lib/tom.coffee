@@ -360,6 +360,20 @@ summarizeTool = (toolName, args) ->
       "I want to launch application #{a.app or 'unknown'}."
     when 'run_activity_command'
       "I want to run activity command #{a.id or 'unknown'}."
+    when 'shutdown'
+      'I want to shut down this computer.'
+    when 'work_power'
+      'I want to press the work laptop power button.'
+    when 'work_unlock'
+      'I want to unlock the work laptop.'
+    when 'work_login'
+      'I want to type the work laptop password.'
+    when 'work_duo'
+      'I want to approve a Duo push on your phone.'
+    when 'work_kvm'
+      'I want to open the work laptop KVM view.'
+    when 'work_kvm_close'
+      'I want to close the work laptop KVM view.'
     else
       keys = Object.keys(a).sort()
       bits = for k in keys.slice(0, 3)

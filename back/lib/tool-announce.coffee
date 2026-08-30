@@ -56,6 +56,13 @@ FAST_TOOLS = new Set [
   'brain_schema_methods'
   'brain_method_invoke'
   'brain_schema_orphans'
+  'work_power'
+  'work_unlock'
+  'work_login'
+  'work_duo'
+  'work_kvm'
+  'work_kvm_close'
+  'shutdown'
 ]
 
 # Cap microagent latency; on timeout abort the agent and use deterministic fallback.
@@ -82,7 +89,14 @@ export fallbackAnnounce = (toolName, args = {}) ->
     when 'media_control' then 'controlling media'
     when 'run_application' then "launching #{args.app or 'an app'}"
     when 'run_activity_command' then "running #{args.id or 'an activity'}"
+    when 'shutdown' then 'starting shutdown'
     when 'current_time' then 'checking the time'
+    when 'work_power' then 'powering the work laptop'
+    when 'work_unlock' then 'unlocking the work laptop'
+    when 'work_login' then 'logging into the work laptop'
+    when 'work_duo' then 'approving Duo'
+    when 'work_kvm' then 'opening the work laptop view'
+    when 'work_kvm_close' then 'closing the work laptop view'
     else
       human = String(toolName or 'a tool').replace /_/g, ' '
       "running #{human}"
