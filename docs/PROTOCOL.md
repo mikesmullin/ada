@@ -115,13 +115,19 @@ Line-delimited JSON, one object per line:
 
 ```
 back → avatar:  {"ev":"state", "listening":true, "active":false,
-                  "thinking":false, "speaking":false, "confirm":false}
+                  "thinking":false, "speaking":false, "confirm":false,
+                  "conversing":false}
+                 // conversing=true while the "stay with me" latch is open
+                 // (active stays true with it so old avatars still show engaged).
                  {"ev":"caption", "who":"ada"|"tom"|"user", "text":"..."}
                  // who ada|tom|omitted → caption particle; empty text is no-op
                  // each non-empty text spawns a caption particle (stack from
                  // bottom, newest lowest). Solid hold scales with word count
                  // (min 1.5s, max 12s) then 5.25s fade.
                  // empty text is a no-op; particles self-expire.
+                 // The back also appends every non-empty caption to
+                 // logs/captions.log; the avatar keeps the last 256 in a
+                 // history ring for wheel-scrollback (10s idle exits).
                  // confirm=true while Tom is waiting: avatar draws check/X.
 avatar → back:  {"ev":"ptt", "down":true|false}
                  {"ev":"click"}     // short press: cancel / dismiss

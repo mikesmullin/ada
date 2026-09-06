@@ -35,7 +35,7 @@ pub const Options = struct {
     back_sock: []const u8,
     perception_sock: []const u8,
     presence_sock: []const u8,
-    size: i32 = 320,
+    size: i32 = 640,
     style: Style = .hud,
 };
 
@@ -107,6 +107,9 @@ const CONFIRM_HIT_R: f32 = 0.068;
 
 const ConfirmHit = enum { none, yes, no };
 
+/// Wheel-scrollback tuning: idle seconds before the history view exits.
+const SCROLL_IDLE_S: f64 = 10.0;
+
 const G = struct {
     var alloc: std.mem.Allocator = undefined;
     var io: std.Io = undefined;
@@ -131,6 +134,11 @@ const G = struct {
     var font: sdf_font_mod.SdfFont = .{};
     /// Closed captions as Game9-style particles (spawn / age / fade / GC).
     var captions: caption_mod.System = .{};
+    /// Wheel-scrollback: any wheel event shows caption history (faded lines
+    /// back in gray) until SCROLL_IDLE_S passes without scrolling.
+    var scroll_until: f64 = 0;
+    var scroll_off: usize = 0;
+    var scroll_acc: f32 = 0;
 
     // --solo keyboard toggles
     var solo_listen: bool = true;
@@ -766,8 +774,26 @@ export fn frame() void {
     sg.draw(0, 3, 1);
 
     // Closed captions: particle stack (newest at bottom, fade after solid hold).
+    // Wheel-scrollback overrides: full history with faded lines back in gray.
     if (G.font.ok) {
-        var cap_text: [caption_mod.MAX][caption_mod.TEXT_CAP]u8 = undefined;
+        if (now < G.scroll_until) {
+            var h_text: [caption_mod.HIST_MAX][caption_mod.TEXT_CAP]u8 = undefined;
+            var h_len: [caption_mod.HIST_MAX]usize = @splat(0);
+            var h_born: [caption_mod.HIST_MAX]f64 = @splat(0);
+            var h_solid: [caption_mod.HIST_MAX]f32 = @splat(0);
+            var h_life: [caption_mod.HIST_MAX]f32 = @splat(0);
+            const h_n = G.captions.snapshotHistory(G.io, &h_text, &h_len, &h_born, &h_solid, &h_life);
+            if (h_n > 0) {
+                const font_size = @max(12.0, @min(18.0, sw * 0.045));
+                G.font.beginFrame();
+                caption_mod.drawScrollback(&G.font, sw, sh, font_size, now, &h_text, &h_len, &h_born, &h_solid, &h_life, h_n, G.scroll_off);
+                G.font.flush(sw, sh);
+            }
+        } else {
+            // Scrollback expired: reset so the next wheel starts from newest.
+            G.scroll_off = 0;
+            G.scroll_acc = 0;
+            var cap_text: [caption_mod.MAX][caption_mod.TEXT_CAP]u8 = undefined;
         var cap_len: [caption_mod.MAX]usize = @splat(0);
         var cap_born: [caption_mod.MAX]f64 = @splat(0);
         var cap_solid: [caption_mod.MAX]f32 = @splat(0);
@@ -778,9 +804,9 @@ export fn frame() void {
             G.font.beginFrame();
             caption_mod.drawStack(&G.font, sw, sh, font_size, now, &cap_text, &cap_len, &cap_born, &cap_solid, &cap_life, cap_n);
             G.font.flush(sw, sh);
+            }
         }
     }
-
     sg.endPass();
     sg.commit();
 }
@@ -839,6 +865,21 @@ export fn event(ev: [*c]const sapp.Event) void {
             G.confirm_press = .none;
             G.press_started = G.last_time;
             sendPtt(true);
+        },
+        .MOUSE_SCROLL => {
+            const y = e.scroll_y;
+            if (y < 0.05 and y > -0.05) return;
+            G.scroll_until = nowSeconds() + SCROLL_IDLE_S;
+            G.scroll_acc += y;
+            // Wheel up = further back; wheel down = toward newest.
+            while (G.scroll_acc >= 1.0) {
+                G.scroll_acc -= 1.0;
+                if (G.scroll_off + 1 < caption_mod.HIST_MAX) G.scroll_off += 1;
+            }
+            while (G.scroll_acc <= -1.0) {
+                G.scroll_acc += 1.0;
+                G.scroll_off -|= 1;
+            }
         },
         .MOUSE_UP => if (e.mouse_button == .LEFT) {
             noteMouse(e);

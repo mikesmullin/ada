@@ -47,7 +47,12 @@ deny that challenge (voice still works). The avatar ignores the
 keyboard in production (voice-keyboard STT was closing it); `q`/`esc`
 quit only in `--solo`. Voice activation: say "Ada …" (transcript
 matching). She does not keep listening after she answers unless she
-calls the `listen` tool.
+calls the `listen` tool — or you latch her open with "stay with me"
+(keep talking to hold the ear fuse; a few seconds of silence sends one
+message until "that's all", orb click, or 5 min silence). Mouse wheel
+scrolls caption history (last 256 lines, faded ones back in gray; exits
+after 10s without scrolling). Every spoken caption also appends to
+`logs/captions.log`.
 
 ## Install
 

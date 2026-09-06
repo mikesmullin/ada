@@ -18,7 +18,7 @@ import { Angela } from 'angela'
 import yaml from 'js-yaml'
 import net from 'node:net'
 import { dirname, join } from 'node:path'
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { execFileSync } from 'node:child_process'
 import { spawn } from './lib/spawn.coffee'
 import { initBrowserAgent } from './ada-browser.coffee'
@@ -158,6 +158,10 @@ config = loadConfig() or {}
 
 ADA_ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '')
 
+# File log for every spoken caption (one line each, chat-log stamped).
+# The avatar keeps its own in-memory ring for wheel-scrollback.
+CAPTION_LOG = join ADA_ROOT, 'logs/captions.log'
+
 # Prefer the `ada` alias from `brain use` so Ada's MCP instance hits her db
 # even if some other brain is selected in an interactive shell.
 ADA_BRAIN = resolveAdaBrain
@@ -174,6 +178,18 @@ CFG =
   voice: process.env.ADA_VOICE or config.voice or 'ada'
   model: process.env.ADA_MODEL or ''
   wake: new RegExp(process.env.ADA_WAKE or '\\bada\\b', 'i')
+  conversationEnabled: if process.env.ADA_CONVERSATION_ENABLED?
+      process.env.ADA_CONVERSATION_ENABLED in ['1', 'true', 'yes']
+    else if config.conversation?.enabled is false
+      false
+    else
+      true
+  conversationEnter: new RegExp(process.env.ADA_CONVERSATION_ENTER or config.conversation?.enter or
+    "\\bstay with me\\b|\\bstay here\\b|\\bkeep listening\\b|\\bdon'?t go\\b", 'i')
+  conversationExit: new RegExp(process.env.ADA_CONVERSATION_EXIT or config.conversation?.exit or
+    "\\bthat'?s all\\b|\\bthat is all\\b|\\bdismissed\\b|\\bgo to sleep\\b|\\bstop listening\\b|\\bleave me alone\\b|\\bwe'?re done\\b|\\bwe are done\\b", 'i')
+  conversationTimeoutMs: Number(process.env.ADA_CONVERSATION_TIMEOUT_MS or
+    config.conversation?.idle_timeout_ms or 300000)
   activityDir: process.env.ADA_ACTIVITY_DIR or '/workspace/mari/activity'
   sfxDir: new URL('../sfx/', import.meta.url).pathname
   voiceSock: process.env.ADA_VOICE_SOCK or
@@ -209,13 +225,31 @@ CFG =
 
 log = (a...) -> console.log "[#{new Date().toISOString().slice 11, 23}]", a...
 
+# Chat-log stamp for user speech entering the LLM: `Sun, Sep 6 @ 5:21p | hello ada`.
+# Local time, 12-hour, no leading zero — matches how Mike reads the clock.
+stampUser = (text) ->
+  d = new Date()
+  days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+  months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+  h24 = d.getHours()
+  ampm = if h24 < 12 then 'a' else 'p'
+  h12 = h24 % 12
+  h12 = 12 if h12 is 0
+  min = String(d.getMinutes()).padStart 2, '0'
+  "#{days[d.getDay()]}, #{months[d.getMonth()]} #{d.getDate()} @ #{h12}:#{min}#{ampm} | #{String(text or '').trim()}"
+
 # ---------------------------------------------------------------------------
 # State machine + avatar socket server (JSON lines)
 
-state = { listening: false, active: false, thinking: false, speaking: false, ear: 0, ear_t: 0, confirm: false }
+state = { listening: false, active: false, thinking: false, speaking: false, ear: 0, ear_t: 0, confirm: false, conversing: false }
 avatars = new Set()
 
 broadcast = (obj) ->
+  if obj.ev is 'caption'
+    t = String(obj.text or '').trim()
+    if t
+      who = if obj.who and obj.who isnt 'ada' then "[#{obj.who}] " else ''
+      try appendFileSync CAPTION_LOG, stampUser("#{who}#{t}") + '\n' catch e then null
   line = JSON.stringify(obj) + '\n'
   for s from avatars
     try s.write line
@@ -252,7 +286,7 @@ startAvatarServer = ->
   log "avatar server listening on unix://#{CFG.backSock}"
 
 # ---------------------------------------------------------------------------
-# PTT + activation gate (no conversation window — listen tool instead)
+# PTT + activation gate (conversation latch rides the fuse ear — see watchConversation)
 
 pttDown = false
 pttDownAt = 0
@@ -273,6 +307,92 @@ lastUnaddressed = null
 micSpeaking = false
 adaHarness = null
 adaSession = null
+
+# Conversation latch (sticky listening): "stay with me" keeps every
+# utterance addressed until "that's all", orb click, or idle timeout.
+# `active` stays true while latched so the orb shows engaged; `conversing`
+# rides along for future avatar styles (old binaries ignore unknown fields).
+conversing = false
+conversationTimer = null
+
+clearConversationTimer = ->
+  if conversationTimer?
+    clearTimeout conversationTimer
+    conversationTimer = null
+
+touchConversation = ->
+  return unless conversing
+  clearConversationTimer()
+  ms = CFG.conversationTimeoutMs
+  if ms > 0
+    conversationTimer = setTimeout (-> exitConversation 'idle'), ms
+
+enterConversation = (reason) ->
+  return if conversing or not CFG.conversationEnabled
+  conversing = true
+  conversationGen += 1
+  setState conversing: true, active: true
+  log "conversation mode on (#{reason})"
+  sfx 'activate'
+  touchConversation()
+  watchConversation conversationGen
+
+exitConversation = (reason, opts = {}) ->
+  return unless conversing
+  conversing = false
+  conversationGen += 1
+  clearConversationTimer()
+  try
+    listenSession?.cancel 'conversation-off'
+  catch e then null
+  setState conversing: false
+  log "conversation mode off (#{reason})"
+  maybeIdle()
+  if opts.speak
+    try cancelAll 'conversation-off' catch e then null
+    speaker.enqueue 'Okay, I will be right here.', null, 'interrupt'
+  else
+    sfx 'click-off'
+
+# Conversation fuse ear: while latched, Mike's speech is captured through
+# the same listen-session path as the `listen` tool (start-timeout +
+# 3s-silence debounce + ear-fuse HUD) instead of one VAD chunk per turn.
+# Each finished slice becomes one 'conversation' turn; the next ear re-arms
+# before she answers so barge-in mid-thinking still rides the fuse.
+conversationGen = 0
+
+watchConversation = (gen) ->
+  return unless conversing and gen is conversationGen
+  try
+    heard = await beginListen CFG.conversationTimeoutMs / 1000,
+      asUser: true, conversation: true
+  catch e
+    log "conversation ear: #{e.message}"
+    return
+  return unless conversing and gen is conversationGen
+  # A `listen` tool call shared this ear and already injected the STT into
+  # its own run — keep the fuse open, don't open a second turn on it.
+  if heard?.injected
+    watchConversation gen
+    return
+  if heard?.reason in ['click', 'cancelled']
+    log "conversation ear ended (#{heard.reason})"
+    return
+  text = String(heard?.text or '').trim()
+  unless heard?.ok and text
+    # Start-timeout with no speech (or error): keep waiting while latched.
+    # The 5-minute idle timer still owns the actual exit.
+    watchConversation gen
+    return
+  if CFG.conversationExit.test text
+    exitConversation 'phrase', speak: true
+    return
+  next = watchConversation gen
+  next.catch (-> null) if next?.catch?
+  try
+    await runTurn { text, t_end: Date.now() / 1000 }, 'conversation'
+  catch e
+    log "conversation turn: #{e.message}"
 
 isActivelyListening = ->
   Boolean pttDown or listenSession? or gathering or earJobs.some (j) -> not j.cancelled
@@ -348,6 +468,10 @@ onAvatarEvent = (ev) ->
         log "click: tom #{if ok then 'approve' else 'deny'}"
         setConfirmUi false
     when 'click'
+      # Orb click is the hard off-switch for the conversation latch.
+      if conversing
+        log 'click: exit conversation mode'
+        exitConversation 'click'
       # Sfx already played on PTT-up (click-off interrupts squelch).
       if listenSession?
         log 'click: cancel listen'
@@ -378,6 +502,7 @@ activationGate = (utt) ->
     for iv in pttIntervals
       up = iv.up ? Date.now() / 1000
       return 'ptt' if iv.down <= utt.t_end + SLOP and up >= utt.t_start - SLOP
+  return 'conversation' if conversing
   return 'wake' if CFG.wake.test utt.text
   null
 
@@ -385,7 +510,7 @@ activationGate = (utt) ->
 # thinking. PTT-up used to skip clearing while currentTurn was set, so the
 # orb stayed "engaged" through a long completion and looked like listening.
 syncActive = ->
-  engaged = pttDown or listenSession? or gathering
+  engaged = pttDown or listenSession? or gathering or conversing
   setState active: engaged
   unless engaged or Date.now() < earFlashUntil or
       earJobs.some (j) -> j.started and not j.cancelled
@@ -607,12 +732,14 @@ lastCompletion = (result) ->
 # ear without waiting for a listen tool call. STT becomes a new user turn
 # (session.run already returned — unlike the listen tool's in-flight inject).
 maybeAutoListen = (turn, result) ->
-  return if turn.cancelled or pttDown or gathering
+  return if turn.cancelled or pttDown or gathering or conversing
   # Listen tool already opened the ear this turn (`?` + listen) — don't arm twice.
   return if turn.hadListen or listenSession? or earJobs.length
   { finish, content } = lastCompletion result
   return unless finish.toLowerCase() is 'stop'
-  return unless /[?？]/.test content
+  # Parenthesized asides are never voiced — a mused `?` isn't a question to Mike.
+  spoken = content.replace /\(.*?\)/gs, ''
+  return unless /[?？]/.test spoken
   log "auto-listen: last reply contains ? (finish=#{finish})"
   try
     heard = await beginListen CFG.listenStartSec, asUser: true, turn: turn
@@ -630,6 +757,12 @@ runTurn = (utt, gate) ->
   # clear our queue AND silence the daemon immediately (don't wait for the
   # reply's first sentence to interrupt)
   listenEpoch++
+  # Conversation latch on-switch: any addressed turn asking her to stay
+  # opens the latch (covers wake, PTT, and listen-injected turns alike).
+  # This turn answers normally; follow-ups ride the fuse ear.
+  if not conversing and CFG.conversationEnter.test String(utt.text or '')
+    enterConversation 'phrase'
+    gate = 'conversation'
   if currentTurn
     currentTurn.cancelled = true
     try
@@ -652,14 +785,25 @@ runTurn = (utt, gate) ->
       lastAudioDone: null
   currentTurn = turn
 
-  sfx 'activate' unless gate is 'ptt'
+  sfx 'activate' unless gate in ['ptt', 'conversation']
   gathering = false
   setEar 0 unless listenSession?
-  setState thinking: true, active: pttDown
+  setState thinking: true, active: (pttDown or conversing)
   log "turn #{turn.id} [#{gate}]: #{utt.text}"
 
+  asideDepth = 0
   splitter = new SentenceSplitter (sentence) ->
     return if turn.cancelled
+    s = sentence.trim()
+    # Parenthesized asides are thinking aloud: caption on screen, never voiced.
+    # Depth-tracked so a span across the splitter (`(Let me check. Hmm.)`)
+    # stays silent, while `(sigh)` mid-flow only quiets its own sentence.
+    if asideDepth > 0 or /^\(/.test s
+      speaker.caption sentence
+      opens = (s.match(/\(/g) or []).length
+      closes = (s.match(/\)/g) or []).length
+      asideDepth = Math.max 0, asideDepth + opens - closes
+      return
     # opening sentence interrupts (kills any stale speech a cancelled turn
     # managed to get in flight); the rest of the reply enqueues gapless
     first = turn.lat.firstSentence is null
@@ -676,7 +820,7 @@ runTurn = (utt, gate) ->
     if agent
       n = compactContextWindow agent, reserveTokens: CFG.contextReserveTokens
       log "turn #{turn.id}: compacted #{n} lines" if n
-    runResult = await adaSession.run prompt: utt.text
+    runResult = await adaSession.run prompt: stampUser utt.text
   catch e
     unless turn.cancelled or e?.aborted or /listen-empty/.test(e?.message or '')
       log "turn #{turn.id} error: #{e.message}"
@@ -690,6 +834,7 @@ runTurn = (utt, gate) ->
     currentTurn = null
     setState thinking: false
     maybeIdle()
+    touchConversation()
 
   # latency report (plan §7)
   l = turn.lat
@@ -796,6 +941,13 @@ onWordsEvent = (msg) ->
       return
     gathering = false
     setEar 0 unless listenSession?
+    # Conversation latch off-switch: exit phrase ends the latch with a
+    # canned ack instead of starting an LLM turn.
+    if conversing and CFG.conversationExit.test String(msg.text or '')
+      gatherBuf = createTranscriptBuf()
+      lastUnaddressed = null
+      exitConversation 'phrase', speak: true
+      return
     gate = activationGate msg
     unless gate
       lastUnaddressed =
@@ -814,6 +966,12 @@ onWordsEvent = (msg) ->
     if gathered and gathered.length > text.length
       text = gathered
     gatherBuf = createTranscriptBuf()
+    # Gap fallback: latched utterances normally ride the fuse ear and never
+    # reach here (an open session absorbs them). This only fires in the tiny
+    # re-arm window — submit immediately rather than dropping speech.
+    if conversing
+      gate = 'conversation'
+      touchConversation()
     runTurn { msg..., text }, gate
 
 connectWords = (isRetry = false) ->
@@ -961,8 +1119,9 @@ pumpEar = ->
         earJobs.shift()
         continue
       asUserOnly = (job.waiters or []).every (w) -> w.opts.asUser
+      managed = (job.waiters or []).some (w) -> w.opts.conversation
       turn = job.opts.turn or job.waiters?[0]?.opts?.turn
-      if asUserOnly and (turn?.cancelled or currentTurn?)
+      if asUserOnly and not managed and (turn?.cancelled or currentTurn?)
         settleEar job, { ok: false, reason: 'cancelled', text: '' }
         earJobs.shift()
         continue
@@ -1013,10 +1172,10 @@ armEar = (job) ->
       maybeIdle()
       # One STT delivery. Prefer in-run inject if any waiter is the listen
       # tool; asUser waiters then skip opening a second turn.
-      inject = (job.waiters or []).some (w) -> not w.opts.asUser
+      inject = (job.waiters or []).some (w) -> not w.opts.asUser and not w.opts.conversation
       if result?.ok and text and inject
         try
-          adaSession?.agent?.enqueueUserAfterTools? text
+          adaSession?.agent?.enqueueUserAfterTools? stampUser text
           result.injected = true
         catch e
           log "listen enqueue user: #{e.message}"
@@ -1031,6 +1190,12 @@ armEar = (job) ->
   # Chime + start-timeout wait for her playback to actually end. The ear
   # is already capturing STT so a barge-in can land while she talks.
   do ->
+    # Conversation latch ear: no chime, start clock runs immediately — the
+    # engaged orb already says she's listening and the fuse HUD is the cue.
+    if (job.waiters or []).some (w) -> w.opts.conversation
+      sess.armFromBufferIfAny()
+      sess.releaseStartClock()
+      return
     ok = await waitVocalization job.epoch
     return unless ok and not sess.done and not job.cancelled
     sess.armFromBufferIfAny()
@@ -1250,13 +1415,17 @@ main = ->
   wrapToolsForUx adaSession.agent if adaSession.agent
   log "angela tools: #{Object.keys(adaSession.agent?.tools or {}).join ', '}"
 
+  try
+    mkdirSync dirname(CAPTION_LOG), recursive: true
+  catch e then null
   startAvatarServer()
   startVoiceSock()
   connectWords()
   connectLevels CFG.perceptionSock, onLevelsFrame, log
   connectPresenceEvents()
   log "ada-back ready (voice=#{CFG.voice} tom=#{CFG.voiceTom} confirm=#{CFG.confirmEnabled} " +
-    "model=#{CFG.model} max_turns=#{CFG.maxTurns} wake=#{CFG.wake} session=#{adaSession.id} " +
+    "model=#{CFG.model} max_turns=#{CFG.maxTurns} wake=#{CFG.wake} conversing=#{CFG.conversationEnabled} " +
+    "session=#{adaSession.id} " +
     "brain=#{if brainOk then 'on' else 'off'} todo=#{if todoOk then 'on' else 'off'})"
 
   # ADA_SELFTEST="<text>": run one synthetic utterance through the full

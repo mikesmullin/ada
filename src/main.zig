@@ -33,7 +33,7 @@ const HELP =
     \\  --style orb|hud          visual style (default hud):
     \\                             orb: glowing liquid orb
     \\                             hud: holographic reticle w/ radial spectrums
-    \\  --size N                 window size in px (default 320)
+    \\  --size N                 window size in px (default 640)
     \\  --back-sock PATH        default $XDG_RUNTIME_DIR/ada-back.sock
     \\  --perception-sock PATH   default /workspace/perception-voice/perception.sock
     \\  --presence-sock PATH     default /tmp/presence-voice.sock

@@ -20,6 +20,8 @@ const sdf_font_mod = @import("sdf_font.zig");
 
 pub const TEXT_CAP = 256;
 pub const MAX = 16;
+/// Scrollback history depth (ring — oldest overwritten, never GC'd by expiry).
+pub const HIST_MAX = 256;
 
 /// Solid hold = clamp(BASE + PER_WORD * n_words, MIN, MAX), then FADE seconds of decay.
 pub const SOLID_BASE_S: f32 = 1.125;
@@ -27,6 +29,16 @@ pub const SOLID_PER_WORD_S: f32 = 0.45; // ~133 wpm reading allowance
 pub const SOLID_MIN_S: f32 = 1.5;
 pub const SOLID_MAX_S: f32 = 12.0;
 pub const FADE_S: f32 = 5.25;
+
+/// One history entry: same text + timing as its particle at spawn.
+/// Expiry only hides particles; history keeps them for wheel-scrollback.
+const HistEntry = struct {
+    born_at: f64 = 0,
+    solid_s: f32 = 0,
+    life_s: f32 = 0,
+    text: [TEXT_CAP]u8 = undefined,
+    text_len: usize = 0,
+};
 
 const Particle = struct {
     /// Seconds from avatar start clock; 0 = dead (Game9 `born_at == 0`).
@@ -84,6 +96,11 @@ pub const System = struct {
     items: [MAX]Particle = @splat(.{}),
     count: usize = 0,
     mu: std.Io.Mutex = .init,
+    /// Scrollback history: every spawned caption, oldest-overwritten ring.
+    /// Live-particle GC never touches this — wheel-scrollback reads it.
+    hist: [HIST_MAX]HistEntry = @splat(.{}),
+    hist_count: usize = 0,
+    hist_next: usize = 0,
 
     /// Spawn a caption particle (thread-safe). Empty text is a no-op.
     pub fn spawn(self: *System, io: std.Io, now: f64, text: []const u8) void {
@@ -125,6 +142,18 @@ pub const System = struct {
         p.text_len = n;
         self.items[self.count] = p;
         self.count += 1;
+
+        // History ring: soft-delete model — expiry hides, never erases.
+        var h: HistEntry = .{
+            .born_at = born,
+            .solid_s = solid,
+            .life_s = solid + FADE_S,
+        };
+        h.text_len = n;
+        @memcpy(h.text[0..n], text[0..n]);
+        self.hist[self.hist_next] = h;
+        self.hist_next = (self.hist_next + 1) % HIST_MAX;
+        if (self.hist_count < HIST_MAX) self.hist_count += 1;
     }
 
     /// Game9 `Particle__progress`: 0 at birth, 1 at death.
@@ -199,6 +228,35 @@ pub const System = struct {
         }
         return n;
     }
+
+    /// Snapshot history oldest → newest for scrollback rendering.
+    pub fn snapshotHistory(
+        self: *System,
+        io: std.Io,
+        out_text: *[HIST_MAX][TEXT_CAP]u8,
+        out_len: *[HIST_MAX]usize,
+        out_born: *[HIST_MAX]f64,
+        out_solid: *[HIST_MAX]f32,
+        out_life: *[HIST_MAX]f32,
+    ) usize {
+        self.mu.lockUncancelable(io);
+        defer self.mu.unlock(io);
+        const n = self.hist_count;
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            // Oldest first: while filling, slot i; once full, hist_next is oldest.
+            const slot = if (n < HIST_MAX) i else (self.hist_next + i) % HIST_MAX;
+            const h = self.hist[slot];
+            out_len[i] = h.text_len;
+            out_born[i] = h.born_at;
+            out_solid[i] = h.solid_s;
+            out_life[i] = h.life_s;
+            if (h.text_len > 0) {
+                @memcpy(out_text[i][0..h.text_len], h.text[0..h.text_len]);
+            }
+        }
+        return n;
+    }
 };
 
 /// Draw stacked captions: newest at the bottom.
@@ -243,6 +301,61 @@ pub fn drawStack(
         const h = heights[ui];
         const y_top = cursor_bottom - h;
         const col: [4]f32 = .{ rgb[0], rgb[1], rgb[2], a * 0.94 };
+        _ = font.drawCaptionAt(screen_w, y_top, font_size, col, texts[ui][0..lens[ui]], max_w_frac);
+        cursor_bottom = y_top - gap;
+        if (cursor_bottom < 4) break;
+    }
+}
+
+/// Scrollback rendering: soft-deleted lines visible again, newest at the
+/// bottom, `offset` lines skipped back from the newest. Live lines keep
+/// their color; expired lines render light gray.
+pub fn drawScrollback(
+    font: *sdf_font_mod.SdfFont,
+    screen_w: f32,
+    screen_h: f32,
+    font_size: f32,
+    now: f64,
+    texts: *const [HIST_MAX][TEXT_CAP]u8,
+    lens: *const [HIST_MAX]usize,
+    borns: *const [HIST_MAX]f64,
+    solids: *const [HIST_MAX]f32,
+    lives: *const [HIST_MAX]f32,
+    n: usize,
+    offset: usize,
+) void {
+    if (!font.ok or n == 0 or font_size <= 0) return;
+    _ = solids; // live/dead comes from born/life progress only
+
+    const gap: f32 = 4.0;
+    const bottom_pad: f32 = 10.0;
+    const max_w_frac: f32 = 0.92;
+    const live_rgb: [3]f32 = .{ 0.92, 0.97, 1.0 };
+    const dead_rgb: [3]f32 = .{ 0.58, 0.61, 0.66 };
+
+    var start: isize = @as(isize, @intCast(n)) - 1 - @as(isize, @intCast(offset));
+    if (start > @as(isize, @intCast(n)) - 1) start = @as(isize, @intCast(n)) - 1;
+    if (start < 0) start = 0; // overscrolled: pin to oldest
+
+    var heights: [HIST_MAX]f32 = @splat(0);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        if (lens[i] == 0) continue;
+        heights[i] = font.measureWrappedHeight(texts[i][0..lens[i]], font_size, screen_w * max_w_frac);
+    }
+
+    var cursor_bottom = screen_h - bottom_pad;
+    var idx = start;
+    while (idx >= 0) : (idx -= 1) {
+        const ui: usize = @intCast(idx);
+        if (lens[ui] == 0) continue;
+        const dead = System.progress(borns[ui], lives[ui], now) >= 1.0;
+        const h = heights[ui];
+        const y_top = cursor_bottom - h;
+        const col: [4]f32 = if (dead)
+            .{ dead_rgb[0], dead_rgb[1], dead_rgb[2], 0.78 }
+        else
+            .{ live_rgb[0], live_rgb[1], live_rgb[2], 0.94 };
         _ = font.drawCaptionAt(screen_w, y_top, font_size, col, texts[ui][0..lens[ui]], max_w_frac);
         cursor_bottom = y_top - gap;
         if (cursor_bottom < 4) break;

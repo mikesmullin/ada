@@ -8,6 +8,15 @@
 voice: ada
 # Tom the Security Guy (M4) — Kokoro michael for confirmation challenges.
 voice_tom: michael
+# Conversation latch (sticky listening). Edit and restart ada-back to apply.
+# "stay with me" keeps every utterance addressed until "that's all",
+# orb click, or 5 min of silence. Env overrides: ADA_CONVERSATION_*.
+conversation:
+  enabled: true
+  # regex strings (case-insensitive); tweak wording without touching code.
+  enter: "\\bstay with me\\b|\\bstay here\\b|\\bkeep listening\\b|\\bdon'?t go\\b"
+  exit: "\\bthat'?s all\\b|\\bthat is all\\b|\\bdismissed\\b|\\bgo to sleep\\b|\\bstop listening\\b|\\bleave me alone\\b|\\bwe'?re done\\b|\\bwe are done\\b"
+  idle_timeout_ms: 300000
 
 # Private brain graph (gitignored; nested git inside). Absolute path to db/.
 brain_path: /workspace/ada/db
