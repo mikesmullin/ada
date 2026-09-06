@@ -26,6 +26,7 @@ timer__create
 timer__dismiss
 timer__show
 media_control
+tail_eavesdrop_transcript
 
 # -- angela builtins --------------------------------------------------------
 goto
