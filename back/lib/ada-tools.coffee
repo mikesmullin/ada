@@ -1,9 +1,9 @@
-# Ada-only tools that are not part of mcp-home: listen (voice sock shim) and
-# control_browser (mcp-zen sub-agent). Registered on the Angela agent after
-# MCP catalog load so the model still sees the same names.
+# Ada-only tools that are not part of mcp-home: listen (voice sock shim).
+# Registered on the Angela agent after MCP catalog load so the model still
+# sees the same names. (Browser control is direct zen_* tools now, wired from
+# lib/mcp-zen.coffee — no sub-agent.)
 import net from 'node:net'
 import { existsSync } from 'fs'
-import { runBrowserAgent } from '../ada-browser.coffee'
 
 callListen = (sockPath, timeout) ->
   new Promise (resolve) ->
@@ -45,15 +45,3 @@ export registerAdaLocalTools = (agent, { voiceSock } = {}) ->
         'Listening cancelled. No response utterance was heard.'
       else
         'No response utterance was heard.'
-
-  agent.Tool 'control_browser',
-    'Delegate a task to a specialized sub-agent that can see and control my ' +
-      'web browser: open/navigate/close tabs, read a page, click, fill in ' +
-      'forms, scroll, screenshot, wait for content, run JavaScript. Give it ' +
-      'one clear task in plain English (e.g. "open chewy.com and tell me my ' +
-      'most recent order"); it figures out and performs whatever browser ' +
-      'steps are needed and reports back what it found or did.'
-    { task: { type: 'string', description: 'the browser task to perform, in plain English' } }
-    ['task']
-    (ctx, { task } = {}) ->
-      await runBrowserAgent task

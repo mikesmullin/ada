@@ -4,9 +4,15 @@ import { normalizeSpeech } from './petname.coffee'
 
 # Tools that get a progress ticker by default (long / external).
 DEFAULT_LONG_TOOLS = [
-  'control_browser'
   'run_activity_command'
   'run_application'
+  'agent_browser_open'
+  'agent_browser_wait_ms'
+  'agent_browser_wait_for_selector'
+  'agent_browser_wait_for_text'
+  'agent_browser_wait_for_url'
+  'agent_browser_wait_for_load'
+  'agent_browser_eval'
 ]
 
 active = null # { toolName, started, cancelPrefix, resolveCancel, timer, speak, ... }
@@ -133,7 +139,9 @@ export startProgress = ({
 humanTool = (toolName, args) ->
   a = args or {}
   switch toolName
-    when 'control_browser' then "browser task#{if a.task then ": #{clip a.task, 60}" else ''}"
+    when 'agent_browser_open' then "opening #{clip a.url or 'page', 60}"
+    when 'agent_browser_eval' then 'running page script'
+    when 'agent_browser_wait_ms', 'agent_browser_wait_for_selector', 'agent_browser_wait_for_text', 'agent_browser_wait_for_url', 'agent_browser_wait_for_load' then 'waiting on the page'
     when 'run_activity_command' then "activity #{a.id or 'command'}"
     when 'run_application' then "launching #{a.app or 'app'}"
     else toolName

@@ -69,8 +69,12 @@ FAST_TOOLS = new Set [
 ANNOUNCE_TIMEOUT_MS = 2000
 
 export fallbackAnnounce = (toolName, args = {}) ->
+  # Browser steps caption deterministically (never the microagent): they fire
+  # several times per task and an LLM round-trip before each would double
+  # step latency for zero extra clarity.
+  if String(toolName or '').startsWith 'agent_browser_'
+    return browserAnnounce toolName, args or {}
   switch toolName
-    when 'control_browser' then 'using the browser'
     when 'remember_fact', 'brain_put_entity' then 'saving that to memory'
     when 'brain_delete_entity' then 'removing that from memory'
     when 'recall_search', 'brain_search', 'brain_get_entity', 'brain_think' then 'checking memory'
@@ -100,6 +104,32 @@ export fallbackAnnounce = (toolName, args = {}) ->
     else
       human = String(toolName or 'a tool').replace /_/g, ' '
       "running #{human}"
+
+browserAnnounce = (toolName, args = {}) ->
+  a = args or {}
+  clipArg = (v, n = 60) ->
+    t = String(v or '').replace(/\s+/g, ' ').trim()
+    if t.length <= n then t else t.slice(0, n - 1) + '…'
+  switch toolName
+    when 'agent_browser_open' then "opening #{clipArg a.url or 'page'}"
+    when 'agent_browser_tab_list' then 'listing tabs'
+    when 'agent_browser_tab_new' then 'opening a tab'
+    when 'agent_browser_tab_close' then 'closing a tab'
+    when 'agent_browser_tab_switch' then 'switching tabs'
+    when 'agent_browser_snapshot' then 'reading the page'
+    when 'agent_browser_get_text' then 'reading page text'
+    when 'agent_browser_get_url', 'agent_browser_get_title' then 'checking the page'
+    when 'agent_browser_screenshot' then 'taking a screenshot'
+    when 'agent_browser_click' then "clicking #{clipArg a.text or a.ref or a.selector or 'page element', 40}"
+    when 'agent_browser_fill', 'agent_browser_type' then 'filling a form'
+    when 'agent_browser_select', 'agent_browser_check', 'agent_browser_uncheck' then 'choosing an option'
+    when 'agent_browser_back' then 'going back'
+    when 'agent_browser_forward' then 'going forward'
+    when 'agent_browser_reload' then 'reloading the page'
+    when 'agent_browser_scroll', 'agent_browser_scroll_into_view' then 'scrolling'
+    when 'agent_browser_wait_ms', 'agent_browser_wait_for_selector', 'agent_browser_wait_for_text', 'agent_browser_wait_for_url', 'agent_browser_wait_for_load' then 'waiting on the page'
+    when 'agent_browser_eval' then 'running page script'
+    else 'using the browser'
 
 cleanLine = (line, fallback) ->
   line = String(line or '').replace(/[\t\n]+/g, ' ').trim()
@@ -147,7 +177,8 @@ export announceTool = ({ toolName, args, model, log, timeoutMs }) ->
   fallback = fallbackAnnounce toolName, args or {}
 
   # Instant tools: never call the LLM (avoids multi-second hangs / nudge loops).
-  if FAST_TOOLS.has(toolName) or not model
+  # Browser steps are always instant-deterministic (see above) for the same reason.
+  if FAST_TOOLS.has(toolName) or String(toolName or '').startsWith('agent_browser_') or not model
     log? "announce (fast): #{fallback}"
     return fallback
 

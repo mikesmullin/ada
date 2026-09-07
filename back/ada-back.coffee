@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { execFileSync } from 'node:child_process'
 import { spawn } from './lib/spawn.coffee'
-import { initBrowserAgent } from './ada-browser.coffee'
+import { ensureMcpZen, registerMcpZenTools } from './lib/mcp-zen.coffee'
 import { ensureBrainMcp, resolveAdaBrain } from './lib/mcp-brain.coffee'
 import { ensureTodoMcp } from './lib/mcp-todo.coffee'
 import {
@@ -54,6 +54,8 @@ wrapToolsForUx = (agent) ->
         try
           # listen arms immediately — announce would delay the waiter (~2s)
           # and drop speech as (unaddressed). Caption is `(listening)`.
+          # Browser steps caption via the instant deterministic path
+          # (tool-announce forces agent_browser_* off the LLM).
           unless name is 'listen'
             try
               line = await announceTool
@@ -224,6 +226,14 @@ CFG =
   maxTurns: Math.max 1, Number(process.env.ADA_MAX_TURNS or config.max_turns or 20) or 20
 
 log = (a...) -> console.log "[#{new Date().toISOString().slice 11, 23}]", a...
+
+# Context-overflow detector: llama-server rejects with 400-class errors when
+# the prompt no longer fits its -c window (e.g. `request (302702 tokens)
+# exceeds the available context size (262144 tokens)`), but our provider
+# wrapper flattens that to a bare `400 Bad Request`. Match the status and
+# every overflow phrasing we might see through the wrapper.
+isContextOverflow = (msg) ->
+  /exceeds the available context size|context (window|length|size|limit)|prompt too (long|large)|max(imum)? (context|tokens)|too many tokens|request entity too large|\b(400|413|422|431)\b/i.test String(msg or '')
 
 # Chat-log stamp for user speech entering the LLM: `Sun, Sep 6 @ 5:21p | hello ada`.
 # Local time, 12-hour, no leading zero — matches how Mike reads the clock.
@@ -822,8 +832,16 @@ runTurn = (utt, gate) ->
       log "turn #{turn.id}: compacted #{n} lines" if n
     runResult = await adaSession.run prompt: stampUser utt.text
   catch e
-    unless turn.cancelled or e?.aborted or /listen-empty/.test(e?.message or '')
-      log "turn #{turn.id} error: #{e.message}"
+    msg = String(e?.message or e or '')
+    if isContextOverflow msg
+      # Deterministic: the session no longer fits the server's context window.
+      # Retrying cannot help (every turn re-sends the same history) — say so
+      # plainly instead of the generic failure line. Recovery is archival +
+      # fresh session, which only Mike can do from here.
+      log "turn #{turn.id} CONTEXT FULL (session exceeds server window): #{msg}"
+      speaker.enqueue 'My conversation memory is full, so I cannot take this turn. I need a fresh session before I can continue.', turn
+    else unless turn.cancelled or e?.aborted or /listen-empty/.test msg
+      log "turn #{turn.id} error: #{msg}"
       speaker.enqueue 'Sorry, something went wrong.', turn
     else
       log "turn #{turn.id} aborted: #{e.message}"
@@ -1312,10 +1330,9 @@ onHarnessDelta = (d, meta) ->
 
 main = ->
   acquireInstanceLock()
-  # Shared gate across every Agent.run() call, including nested ones: a turn
-  # that calls control_browser holds its own slot AND the sub-agent's for the
-  # whole delegated task, so 4 barely covers one turn + one barge-in. Bumped
-  # to 6 for headroom (see agl's Agent.default.concurrency / _acquireRunSlot).
+  # Shared gate across every Agent.run() call: a turn plus one barge-in can
+  # overlap, so 4 barely covers it. Bumped to 6 for headroom (see agl's
+  # Agent.default.concurrency / _acquireRunSlot).
   Agent.default.concurrency = 6
 
   # fail fast if presence-voice isn't up (plan §9.3); systemd retries us.
@@ -1332,8 +1349,10 @@ main = ->
     console.error '       start it: systemctl --user start presence-voice'
     process.exit 1
 
-  # optional: the browser sub-agent, only if mcp-zen is running
-  await initBrowserAgent()
+  # Browser tools live on this agent directly (no sub-agent): warm up mcp-zen
+  # so the first zen_* call doesn't pay startup latency. Non-fatal if down —
+  # registration below re-checks before wiring tools.
+  await ensureMcpZen()
 
   # long-term memory: Ada's own `brain mcp` over stdio, pointed at the `ada`
   # `brain use` database. Starts `brain server` for that db if it isn't up.
@@ -1350,6 +1369,8 @@ main = ->
   bun = process.execPath
   homeMcp = process.env.ADA_HOME_MCP or '/workspace/mcp-home/server.coffee'
   workMcp = process.env.ADA_WORK_MCP or '/workspace/mcp-work/server.coffee'
+  fileMcp = process.env.ADA_FILE_MCP or '/workspace/mcp-file-io/server.mjs'
+  compactMcp = process.env.ADA_COMPACT_MCP or '/workspace/mcp-compact/server.coffee'
   sandboxMcp = process.env.ADA_SANDBOX_MCP or '/workspace/mcp/sandbox/server.mjs'
   mcp = [
     name: 'home'
@@ -1365,6 +1386,19 @@ main = ->
     command: bun
     args: [workMcp]
     cwd: process.env.ADA_WORK_MCP_CWD or '/workspace/mcp-work'
+  ,
+    name: 'file'
+    prefix: false
+    command: bun
+    args: [fileMcp]
+    cwd: process.env.ADA_FILE_MCP_CWD or '/workspace/mcp-file-io'
+    env: if process.env.MCP_FILE_ROOT then { MCP_FILE_ROOT: process.env.MCP_FILE_ROOT } else {}
+  ,
+    name: 'compact'
+    prefix: false
+    command: bun
+    args: [compactMcp]
+    cwd: process.env.ADA_COMPACT_MCP_CWD or '/workspace/mcp-compact'
   ,
     name: 'sandbox'
     prefix: false
@@ -1412,6 +1446,10 @@ main = ->
   adaSession = await openOrCreateSession adaHarness
   await adaSession.listToolCatalog()
   registerAdaLocalTools adaSession.agent, voiceSock: CFG.voiceSock
+  if adaSession.agent and await ensureMcpZen()
+    registerMcpZenTools adaSession.agent
+    nZen = Object.keys(adaSession.agent.tools).filter((t) -> t.startsWith 'agent_browser_').length
+    log "browser tools: direct (#{nZen} agent_browser_* on this agent)"
   wrapToolsForUx adaSession.agent if adaSession.agent
   log "angela tools: #{Object.keys(adaSession.agent?.tools or {}).join ', '}"
 

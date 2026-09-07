@@ -40,7 +40,7 @@ allowlist_file: /workspace/ada/allowlist.txt
 # back/lib/tool-gate.coffee. low+allowlisted runs; medium/high need Tom when
 # confirm.enabled is true (M4).
 # tool_risk:
-#   control_browser: high
+#   agent_browser_eval: high
 
 # Tom / confirm (M4). When enabled, medium/high (and non-allowlisted) tools
 # require a spoken 3-word phrase (michael). Deny with belay that order.

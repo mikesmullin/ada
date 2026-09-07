@@ -354,8 +354,11 @@ summarizeTool = (toolName, args) ->
       "I want to take task #{a.id or 'unknown'}."
     when 'todo_release'
       "I want to release task #{a.id or 'unknown'}."
-    when 'control_browser'
-      "I want to control the browser: #{clip a.task or 'a browser task', 100}."
+    when 'agent_browser_open' then "I want to open #{clip a.url or 'a page', 100} in the browser."
+    when 'agent_browser_click' then "I want to click #{clip a.text or a.selector or a.ref or 'something', 100} in the browser."
+    when 'agent_browser_fill', 'agent_browser_type', 'agent_browser_select', 'agent_browser_check', 'agent_browser_uncheck', 'agent_browser_upload' then 'I want to fill in a web page.'
+    when 'agent_browser_eval' then 'I want to run a script in the browser.'
+    when 'agent_browser_tab_new', 'agent_browser_tab_close', 'agent_browser_tab_switch', 'agent_browser_window_new', 'agent_browser_close', 'agent_browser_back', 'agent_browser_forward', 'agent_browser_reload', 'agent_browser_press', 'agent_browser_scroll', 'agent_browser_scroll_into_view', 'agent_browser_hover', 'agent_browser_focus', 'agent_browser_find', 'agent_browser_dblclick', 'agent_browser_drag', 'agent_browser_tap', 'agent_browser_swipe', 'agent_browser_frame_switch', 'agent_browser_frame_main', 'agent_browser_dialog_accept', 'agent_browser_dialog_dismiss', 'agent_browser_webmcp_invoke', 'agent_browser_webmcp_result', 'agent_browser_webmcp_cancel' then 'I want to act in the browser.'
     when 'run_application'
       "I want to launch application #{a.app or 'unknown'}."
     when 'run_activity_command'
