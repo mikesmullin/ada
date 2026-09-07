@@ -52,7 +52,7 @@ calls the `listen` tool — or you latch her open with "stay with me"
 message until "that's all", orb click, or 5 min silence). Mouse wheel
 scrolls caption history (last 256 lines, faded ones back in gray; exits
 after 10s without scrolling). Every spoken caption also appends to
-`logs/captions.log`.
+`logs/captions.log`. The pink pie on her dial ring shows context fullness.
 
 ## Install
 

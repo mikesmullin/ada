@@ -70,6 +70,8 @@ const Targets = struct {
     ear_remain: f32 = 0,
     /// Tom waiting for approve/deny: shader draws check/X; clicks hit-test.
     confirm: f32 = 0,
+    /// Context-window fullness 0..1 (snapped, not smoothed).
+    ctx: f32 = 0,
 };
 
 /// Render-thread-only smoothed copies of Targets.
@@ -90,6 +92,7 @@ const Smooth = struct {
     ear_remain: f32 = 0,
     confirm: f32 = 0,
     confirm_hover: f32 = 0,
+    ctx: f32 = 0,
 };
 
 /// Keep in sync with confirmBtn() centers in hud.glsl / orb.glsl.
@@ -146,6 +149,7 @@ const G = struct {
     var solo_think: bool = false;
     var solo_speak: bool = false;
     var solo_confirm: bool = false;
+    var solo_ctx: f32 = 0;
     var solo_pulse: f64 = -10;
     var solo_caption_i: u32 = 0;
 
@@ -423,6 +427,7 @@ const StateMsg = struct {
     ear: f64 = 0,
     ear_t: f64 = 0,
     confirm: bool = false,
+    ctx: f64 = 0,
 };
 
 fn spawnCaption(text: []const u8) void {
@@ -464,6 +469,7 @@ fn handleBackLine(line: []const u8) void {
     G.targets.ear_phase = @floatCast(msg.ear);
     G.targets.ear_remain = @floatCast(msg.ear_t);
     G.targets.confirm = if (msg.confirm) 1 else 0;
+    G.targets.ctx = @floatCast(@min(1.0, @max(0.0, msg.ctx)));
 }
 
 fn backThread() void {
@@ -521,6 +527,7 @@ fn setConnected(ok: bool) void {
         G.targets.ear_phase = 0;
         G.targets.ear_remain = 0;
         G.targets.confirm = 0;
+        G.targets.ctx = 0;
         // leave caption particles to age out on their own
     }
 }
@@ -699,6 +706,7 @@ export fn frame() void {
         tgt.ear_phase = G.targets.ear_phase;
         tgt.ear_remain = G.targets.ear_remain;
         tgt.confirm = G.targets.confirm;
+        tgt.ctx = G.targets.ctx;
     }
 
     // Her actual audio opens the speaking gate (playback truth beats the
@@ -744,6 +752,7 @@ export fn frame() void {
     s.ear_phase = tgt.ear_phase;
     s.ear_remain = tgt.ear_remain;
     s.confirm = tgt.confirm;
+    s.ctx = tgt.ctx; // snapped: fullness is stepwise truth, not a vibe
     s.confirm_hover = switch (hitConfirm(mouseUv(), tgt.confirm > 0.5)) {
         .none => 0,
         .yes => 1,
@@ -759,7 +768,7 @@ export fn frame() void {
         .states_a = .{ w_idle, s.listening, s.active, s.thinking },
         .states_b = .{ s.speaking, s.connected, s.ear_phase, s.ear_remain },
         .user_a = .{ s.user.rms, s.user.band[0], s.user.band[1], s.user.band[2] },
-        .user_b = .{ s.user.band[3], s.user_env, s.user.vad, 0 },
+        .user_b = .{ s.user.band[3], s.user_env, s.user.vad, s.ctx },
         .ada_a = .{ s.ada.rms, s.ada.band[0], s.ada.band[1], s.ada.band[2] },
         .ada_b = .{ s.ada.band[3], s.ada_env, s.confirm, s.confirm_hover },
     };
@@ -819,6 +828,7 @@ fn soloDrive(tgt: *Targets, now: f64) void {
     tgt.thinking = if (G.solo_think) 1 else 0;
     tgt.speaking = if (G.solo_speak) 1 else 0;
     tgt.confirm = if (G.solo_confirm) 1 else 0;
+    tgt.ctx = G.solo_ctx;
     tgt.connected = 1;
 
     const t: f32 = @floatCast(now);
@@ -929,6 +939,10 @@ fn soloKey(key: sapp.Keycode) void {
             }
         },
         ._6 => G.solo_confirm = !G.solo_confirm,
+        ._7 => {
+            // context-fullness demo: 0 -> 0.45 -> 0.8 -> 0.95 -> 0
+            G.solo_ctx = if (G.solo_ctx < 0.1) 0.45 else if (G.solo_ctx < 0.6) 0.8 else if (G.solo_ctx < 0.9) 0.95 else 0;
+        },
         .SPACE => {
             G.solo_pulse = G.last_time;
             G.solo_caption_i +%= 1;

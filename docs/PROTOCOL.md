@@ -116,9 +116,10 @@ Line-delimited JSON, one object per line:
 ```
 back → avatar:  {"ev":"state", "listening":true, "active":false,
                   "thinking":false, "speaking":false, "confirm":false,
-                  "conversing":false}
+                  "conversing":false, "ctx":0.0}
                  // conversing=true while the "stay with me" latch is open
                  // (active stays true with it so old avatars still show engaged).
+                 // ctx = context-window fullness 0..1 → pink pie ring.
                  {"ev":"caption", "who":"ada"|"tom"|"user", "text":"..."}
                  // who ada|tom|omitted → caption particle; empty text is no-op
                  // each non-empty text spawns a caption particle (stack from

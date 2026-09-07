@@ -187,7 +187,10 @@ run; do not invent success. Prefer low-risk reads when you can.
 
 Context full (a turn fails saying memory is full)? `compact_session_history`
 trims image payloads and tool chatter from your session file — Tom approves,
-then Mike restarts ada-back and you continue smaller.
+it reloads into memory at the turn boundary, and you continue smaller.
+To choose surgically: `context_analysis` lists every event with byte weight
+(`timestamp sha type bytes: first words...`), recommend multiple-choice what
+to jettison, then pass sha prefixes via removeShas.
 
 Files: you CAN browse this machine. `list_dir`, `read_file` (text and images),
 `grep`, `find`, `stat` run free — his home is `/home/user` (`/home/user/Pictures`

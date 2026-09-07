@@ -19,7 +19,7 @@ import yaml from 'js-yaml'
 import net from 'node:net'
 import { dirname, join } from 'node:path'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn as spawnProc } from 'node:child_process'
 import { spawn } from './lib/spawn.coffee'
 import { ensureMcpZen, registerMcpZenTools } from './lib/mcp-zen.coffee'
 import { ensureBrainMcp, resolveAdaBrain } from './lib/mcp-brain.coffee'
@@ -106,6 +106,17 @@ wrapToolsForUx = (agent) ->
               out = await fn ctx, args
             preview = String(out ? '').replace(/\s+/g, ' ').slice(0, 240)
             log "tool ← #{name} #{preview}"
+            # Compact tool that really rewrote this session: reload the
+            # in-memory context at turn end (never mid-run). Dry runs and
+            # other sessions are ignored.
+            if name is 'compact_session_history'
+              try
+                res = JSON.parse String(out ? '')
+                if res and res.dryRun is false and res.session is adaSession?.id and
+                    Number(res.eventsAfter) < Number(res.eventsBefore)
+                  pendingCtxReload = true
+                  log "compact ran (#{res.eventsBefore}→#{res.eventsAfter}); reload at turn end"
+              catch e then null
             out
           catch e
             log "tool ✗ #{name} #{e.message}"
@@ -251,7 +262,7 @@ stampUser = (text) ->
 # ---------------------------------------------------------------------------
 # State machine + avatar socket server (JSON lines)
 
-state = { listening: false, active: false, thinking: false, speaking: false, ear: 0, ear_t: 0, confirm: false, conversing: false }
+state = { listening: false, active: false, thinking: false, speaking: false, ear: 0, ear_t: 0, confirm: false, conversing: false, ctx: 0 }
 avatars = new Set()
 
 broadcast = (obj) ->
@@ -324,6 +335,176 @@ adaSession = null
 # rides along for future avatar styles (old binaries ignore unknown fields).
 conversing = false
 conversationTimer = null
+
+# Context reload: set when the compact tool actually rewrites this session's
+# file; performed at turn end (never mid-run — AGL iterates the array).
+pendingCtxReload = false
+pendingAutoCompact = false
+lastAutoCompactAt = 0
+
+# Direct MCP call to the compact server (same tool the model uses, but invoked
+# by the back itself for automatic recovery — no Tom round-trip by design).
+mcpToolCall = (script, cwd, name, args, timeoutMs = 45000) ->
+  new Promise (resolve) ->
+    done = false
+    finish = (v) ->
+      unless done
+        done = true
+        resolve v
+    try
+      child = spawnProc process.execPath, [script], cwd: cwd, stdio: ['pipe', 'pipe', 'pipe']
+    catch e then return finish { ok: false, error: e.message }
+    acc = ''
+    timer = setTimeout (->
+      try child.kill() catch then null
+      finish { ok: false, error: 'timeout' }
+    ), timeoutMs
+    child.stdout.on 'data', (d) ->
+      acc += d.toString()
+      while (idx = acc.indexOf '\n') >= 0
+        line = acc.slice(0, idx).trim()
+        acc = acc.slice idx + 1
+        continue unless line
+        try msg = JSON.parse line catch then continue
+        if msg.id is 2
+          clearTimeout timer
+          try child.kill() catch then null
+          finish { ok: true, text: msg.result?.content?[0]?.text }
+    child.on 'error', (e) ->
+      clearTimeout timer
+      finish { ok: false, error: e.message }
+    child.stdin.write JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } }) + '\n'
+    child.stdin.write JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } }) + '\n'
+
+autoCompactSession = ->
+  try
+    lastAutoCompactAt = Date.now()
+    script = process.env.ADA_COMPACT_MCP or '/workspace/mcp-compact/server.coffee'
+    cwd = process.env.ADA_COMPACT_MCP_CWD or '/workspace/mcp-compact'
+    res = await mcpToolCall script, cwd, 'compact_session_history', { dryRun: false }
+    unless res.ok
+      log "auto-compact failed: #{res.error}"
+      return false
+    out = JSON.parse res.text
+    if out and out.dryRun is false and out.session is adaSession?.id and
+        Number(out.eventsAfter) < Number(out.eventsBefore)
+      pendingCtxReload = true
+      log "auto-compact ran (#{out.eventsBefore}→#{out.eventsAfter})"
+      true
+    else
+      log 'auto-compact no-op'
+      false
+  catch e
+    log "auto-compact failed: #{e.message}"
+    false
+
+reloadAgentContextFromDisk = ->
+  try
+    store = adaHarness?.sessionStore
+    agent = adaSession?.agent
+    unless store and agent and adaSession
+      log 'context reload: no store/agent/session'
+      return 0
+    # buildContextWindowItems re-reads the jsonl from disk every call, so a
+    # compacted file rebuilds a smaller array. Mapping mirrors Angela's
+    # private #seedAgentContext exactly.
+    items = store.buildContextWindowItems adaSession.id
+    unless Array.isArray items
+      log 'context reload: no items'
+      return 0
+    agent.context_window = []
+    for m in items when m?.role
+      agent.context_window.push Object.assign { visible: m.visible isnt false }, m, { id: (m.id or m.event_id), _persisted: true }
+    n = agent.context_window.length
+    log "context reloaded from disk: #{n} items"
+    await updateCtxFullness()
+    n
+  catch e
+    log "context reload failed: #{e.message}"
+    0
+
+# Context-window fullness 0..1 for the avatar pie ring. Denominator is the
+# honest limit: min(AGL's per-model table, the llama-server -c floor).
+# AGL's own lookup misfires on this config (returns its 32k fallback despite
+# the table entry), so read context_windows directly — same documented file.
+# Server -c isn't exposed by any llama-server API; precedence is
+# ADA_SERVER_CTX env > size observed in overflow errors > verified default.
+ctxServerObserved = 0
+
+aglConfig = ->
+  try
+    cfgPath = process.env.AGL_CONFIG_PATH or "#{process.env.HOME}/.config/agl/config.yaml"
+    yaml.load readFileSync(cfgPath, 'utf8')
+  catch e then null
+
+aglDefaultModel = ->
+  try String(aglConfig()?.default_model or '').trim() catch e then ''
+
+aglModelWindow = (spec) ->
+  try
+    windows = aglConfig()?.context_windows or {}
+    prov = null
+    model = String(spec or '')
+    if model.includes ':'
+      parts = model.split ':'
+      prov = parts[0]
+      model = parts.slice(1).join ':'
+    group = windows[prov] or {}
+    v = group[model]
+    v = group.default unless v?
+    n = Number v
+    return n if Number.isFinite(n) and n > 0
+  catch e then null
+  0
+
+ctxDenominator = ->
+  spec = CFG.model or aglDefaultModel()
+  agl = aglModelWindow spec
+  srv = Number(process.env.ADA_SERVER_CTX or 0)
+  srv = ctxServerObserved unless srv > 0
+  srv = 262144 unless srv > 0
+  denom = agl
+  denom = srv if denom <= 0 or srv < denom
+  { spec, agl, srv, denom }
+
+updateCtxFullness = ->
+  try
+    store = adaHarness?.sessionStore
+    return unless store and adaSession
+    used = null
+    denom = 0
+    # Live server truth first: /slots reports actual KV residency and n_ctx.
+    # Client-side counts systematically under-read (server adds vision tokens
+    # and its own accounting — observed 314k server vs 59k client), so the
+    # slot is the numerator whenever reachable; sidecar is fallback.
+    try
+      base = process.env.ADA_LLAMA_URL or 'http://127.0.0.1:1234'
+      res = await fetch "#{base}/slots"
+      if res.ok
+        slots = await res.json()
+        best = null
+        for x in slots or []
+          if (x?.n_prompt_tokens or 0) > (best?.n_prompt_tokens or 0)
+            best = x
+        if best
+          u = Number best.n_prompt_tokens
+          used = u if Number.isFinite(u) and u >= 0
+          d = Number best.n_ctx
+          denom = d if Number.isFinite(d) and d > 0
+    catch e then null
+    unless used?
+      st = store.load adaSession.id
+      n = Number st?.lastPromptTokens
+      used = n if Number.isFinite(n) and n > 0
+    return unless used?
+    unless denom > 0
+      { denom } = ctxDenominator()
+    return unless denom > 0
+    frac = Math.max 0, Math.min 1, used / denom
+    frac = Math.round(frac * 200) / 200
+    setState ctx: frac
+  catch e
+    log "ctx fullness: #{e.message}"
 
 clearConversationTimer = ->
   if conversationTimer?
@@ -762,7 +943,7 @@ maybeAutoListen = (turn, result) ->
   return if turn.cancelled or currentTurn?
   await runTurn { text, t_end: Date.now() / 1000 }, 'listen'
 
-runTurn = (utt, gate) ->
+runTurn = (utt, gate, retried = false) ->
   # barge-in: a new passing utterance cancels whatever is pending/speaking —
   # clear our queue AND silence the daemon immediately (don't wait for the
   # reply's first sentence to interrupt)
@@ -835,11 +1016,19 @@ runTurn = (utt, gate) ->
     msg = String(e?.message or e or '')
     if isContextOverflow msg
       # Deterministic: the session no longer fits the server's context window.
-      # Retrying cannot help (every turn re-sends the same history) — say so
-      # plainly instead of the generic failure line. Recovery is archival +
-      # fresh session, which only Mike can do from here.
+      # First overflow in a while: say we're compacting, then do it below and
+      # retry this same turn once. Repeat offender (still full after a recent
+      # auto-compact): admit defeat — only Mike can archive for a fresh start.
       log "turn #{turn.id} CONTEXT FULL (session exceeds server window): #{msg}"
-      speaker.enqueue 'My conversation memory is full, so I cannot take this turn. I need a fresh session before I can continue.', turn
+      m = msg.match /available context size \((\d+) tokens\)/
+      if m
+        ctxServerObserved = Number m[1]
+        log "ctx floor observed from server: #{ctxServerObserved}"
+      if Date.now() - lastAutoCompactAt > 600000
+        speaker.enqueue 'My conversation memory is full — compacting it now, one moment.', turn
+        pendingAutoCompact = true
+      else
+        speaker.enqueue 'My conversation memory is full, so I cannot take this turn. I need a fresh session before I can continue.', turn
     else unless turn.cancelled or e?.aborted or /listen-empty/.test msg
       log "turn #{turn.id} error: #{msg}"
       speaker.enqueue 'Sorry, something went wrong.', turn
@@ -853,6 +1042,15 @@ runTurn = (utt, gate) ->
     setState thinking: false
     maybeIdle()
     touchConversation()
+  if pendingCtxReload or pendingAutoCompact
+    if pendingAutoCompact
+      pendingAutoCompact = false
+      didAutoCompact = await autoCompactSession()
+    else
+      didAutoCompact = false
+    if pendingCtxReload
+      pendingCtxReload = false
+      await reloadAgentContextFromDisk()
 
   # latency report (plan §7)
   l = turn.lat
@@ -862,6 +1060,10 @@ runTurn = (utt, gate) ->
     "utterance→first_token=#{ms l.firstToken} first_sentence=#{ms l.firstSentence} " +
     "speech_done=#{ms l.lastAudioDone}#{if turn.cancelled then ' (cancelled)' else ''}"
 
+  await updateCtxFullness()
+  if didAutoCompact and not retried
+    log "turn #{turn.id}: retrying after auto-compact"
+    return await runTurn utt, gate, true
   await maybeAutoListen turn, runResult
 
 cancelAll = (reason) ->
@@ -1452,6 +1654,11 @@ main = ->
     log "browser tools: direct (#{nZen} agent_browser_* on this agent)"
   wrapToolsForUx adaSession.agent if adaSession.agent
   log "angela tools: #{Object.keys(adaSession.agent?.tools or {}).join ', '}"
+  await updateCtxFullness()
+  try
+    b = ctxDenominator()
+    log "ctx budget: model=#{b.spec} agl=#{b.agl} server=#{b.srv} → #{b.denom}"
+  catch e then null
 
   try
     mkdirSync dirname(CAPTION_LOG), recursive: true
@@ -1459,6 +1666,9 @@ main = ->
   startAvatarServer()
   startVoiceSock()
   connectWords()
+  # Live pie: re-read server slot residency every 10s so the ring tracks
+  # mid-turn growth (images attach mid-turn; turn-end accounting is stale).
+  setInterval (-> updateCtxFullness().catch -> null), 10000
   connectLevels CFG.perceptionSock, onLevelsFrame, log
   connectPresenceEvents()
   log "ada-back ready (voice=#{CFG.voice} tom=#{CFG.voiceTom} confirm=#{CFG.confirmEnabled} " +

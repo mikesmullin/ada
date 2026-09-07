@@ -63,6 +63,8 @@ FAST_TOOLS = new Set [
   'work_kvm'
   'work_kvm_close'
   'shutdown'
+  'compact_session_history'
+  'context_analysis'
 ]
 
 # Cap microagent latency; on timeout abort the agent and use deterministic fallback.
@@ -95,6 +97,8 @@ export fallbackAnnounce = (toolName, args = {}) ->
     when 'run_activity_command' then "running #{args.id or 'an activity'}"
     when 'shutdown' then 'starting shutdown'
     when 'current_time' then 'checking the time'
+    when 'compact_session_history' then 'compacting session history'
+    when 'context_analysis' then 'analyzing context'
     when 'work_power' then 'powering the work laptop'
     when 'work_unlock' then 'unlocking the work laptop'
     when 'work_login' then 'logging into the work laptop'

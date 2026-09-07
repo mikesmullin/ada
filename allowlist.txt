@@ -80,3 +80,6 @@ read_file
 grep
 find
 stat
+
+# -- context analysis (compact, low). compact_session_history stays Tom-gated -
+context_analysis

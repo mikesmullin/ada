@@ -22,7 +22,7 @@ layout(binding=0) uniform fs_params {
     vec4 states_a;  // x: idle, y: listening, z: active, w: thinking
     vec4 states_b;  // x: speaking, y: brain-connected, z: ear 0/1/2, w: ear remain 0..1
     vec4 user_a;    // x: rms, yzw: band 0..2      (mic / the user)
-    vec4 user_b;    // x: band 3, y: attack env, z: vad, w: unused
+    vec4 user_b;    // x: band 3, y: attack env, z: vad, w: ctx fullness 0..1
     vec4 ada_a;     // x: rms, yzw: band 0..2      (tts / ada)
     vec4 ada_b;     // x: band 3, y: attack env, z: tom-confirm 0/1, w: hover 0/1/2
 };
@@ -124,6 +124,7 @@ void main() {
     float u_rms = user_a.x;
     vec4  u_band = vec4(user_a.yzw, user_b.x);
     float u_env = user_b.y;
+    float ctx_full = user_b.w; // 0..1 context-window fullness (pink pie)
     float a_rms = ada_a.x;
     vec4  a_band = vec4(ada_a.yzw, ada_b.x);
     float a_env = ada_b.y;
@@ -140,6 +141,7 @@ void main() {
     vec3 white  = vec3(0.85, 0.97, 1.00);
     vec3 violet = vec3(0.62, 0.42, 1.00);  // thinking
     vec3 amber  = vec3(1.00, 0.68, 0.25);  // active attention
+    vec3 pink   = vec3(1.00, 0.38, 0.62);  // context fullness (unused elsewhere)
     vec3 warm   = vec3(0.45, 0.95, 1.00);  // her voice
 
     // thinking spins the machinery up; a dead brain stalls it
@@ -190,6 +192,22 @@ void main() {
         rr = th + t * spin * 0.12;
         mask = ringLine(r, 0.815, 0.0075, aa) * dashes(rr, 180.0, 0.10, 0.0);
         col += ink * mask * gain * 0.7;
+
+        // r .80 dial doubles as the context gauge: pink pie fills clockwise
+        // from 12 o'clock with window fullness; faint track always visible.
+        {
+            float ctxf = clamp(ctx_full, 0.0, 1.0);
+            col += pink * ringLine(r, 0.800, 0.0042, aa) * 0.16;
+            if (ctxf > 0.004) {
+                float ang01 = fract(th / TAU - 0.25); // CCW from 12 o'clock
+                float lit = step(ang01, ctxf);
+                float urg = smoothstep(0.70, 1.0, ctxf); // hot near full
+                float blink = mix(1.0, 0.55 + 0.45 * sin(t * 5.0), urg);
+                col += pink * ringLine(r, 0.800, 0.0042, aa) * lit * (0.55 + 0.75 * ctxf) * blink;
+                float head = 1.0 - smoothstep(0.0, 0.025, abs(ang01 - ctxf));
+                col += vec3(1.0, 0.75, 0.85) * ringLine(r, 0.800, 0.006, aa) * head * (0.8 + urg);
+            }
+        }
 
         // r .93: sparse outer arcs, slow
         rr = th - t * spin * 0.07;

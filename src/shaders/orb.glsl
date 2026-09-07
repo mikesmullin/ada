@@ -18,7 +18,7 @@ layout(binding=0) uniform fs_params {
     vec4 states_a;  // x: idle, y: listening, z: active, w: thinking
     vec4 states_b;  // x: speaking, y: brain-connected, z: ear 0/1/2, w: ear remain 0..1
     vec4 user_a;    // x: rms, yzw: band 0..2      (mic / the user)
-    vec4 user_b;    // x: band 3, y: attack env, z: vad, w: unused
+    vec4 user_b;    // x: band 3, y: attack env, z: vad, w: ctx fullness 0..1
     vec4 ada_a;     // x: rms, yzw: band 0..2      (tts / ada)
     vec4 ada_b;     // x: band 3, y: attack env, z: tom-confirm 0/1, w: hover 0/1/2
 };
@@ -100,6 +100,7 @@ void main() {
 
     float u_rms = user_a.x;
     vec4  u_band = vec4(user_a.yzw, user_b.x);
+    float ctx_full = user_b.w; // 0..1 context-window fullness (pink pie)
     float a_rms = ada_a.x;
     vec4  a_band = vec4(ada_a.yzw, ada_b.x);
 
@@ -180,9 +181,27 @@ void main() {
     float ring = exp(-pow((r - ring_r) * 60.0, 2.0));
     vec3 ring_out = vec3(0.9, 0.95, 1.0) * ring * press * 0.9;
 
+    // ---- context fullness: pink pie arc outside the core ----------------
+    vec3 pink_out = vec3(0.0);
+    {
+        float ctxf = clamp(ctx_full, 0.0, 1.0);
+        vec3 pink = vec3(1.00, 0.38, 0.62);
+        float gauge = exp(-pow((r - 0.60) * 70.0, 2.0));
+        pink_out += pink * gauge * 0.10;
+        if (ctxf > 0.004) {
+            float ang01 = fract(theta / 6.28318531 - 0.25); // CCW from 12 o'clock
+            float lit = step(ang01, ctxf);
+            float urg = smoothstep(0.70, 1.0, ctxf);
+            float blink = mix(1.0, 0.55 + 0.45 * sin(t * 5.0), urg);
+            pink_out += pink * gauge * lit * (0.5 + 0.7 * ctxf) * blink;
+            float head = 1.0 - smoothstep(0.0, 0.03, abs(ang01 - ctxf));
+            pink_out += vec3(1.0, 0.75, 0.85) * gauge * head * (0.8 + urg);
+        }
+    }
+
     // ---- compose --------------------------------------------------------
     vec3 bg = vec3(0.026, 0.028, 0.045); // v1: opaque dark; transparency later
-    vec3 col = bg + core_out + halo_out + think_out + ring_out;
+    vec3 col = bg + core_out + halo_out + think_out + ring_out + pink_out;
 
     // ---- ear rec/fuse ------------------------------------------------------
     if (ear_phase > 0.5) {
