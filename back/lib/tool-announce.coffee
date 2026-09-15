@@ -89,19 +89,33 @@ mediaAnnounce = (args = {}) ->
   if args.volume? then return 'setting system volume'
   "checking what's playing"
 
+# Short caption tag: class (zen), else a clipped title, else window id.
+windowLabel = (args = {}) ->
+  cls = String(args.class or '').replace(/\s+/g, ' ').trim()
+  if cls
+    return cls.replace(/[^A-Za-z0-9._-]+/g, '').slice(0, 24).toLowerCase() or null
+  title = String(args.title or '').replace(/\s+/g, ' ').trim()
+  if title then return title.slice(0, 20).toLowerCase()
+  if args.windowId? then return String(args.windowId)
+  if args.focused is true then return 'focused'
+  null
+
 computerAnnounce = (toolName, args = {}) ->
+  tag = windowLabel args
+  which = if tag then "#{tag} window" else 'a window'
+  whichs = if tag then "#{tag} windows" else 'windows'
   switch toolName
-    when 'window_list' then 'listing windows'
-    when 'window_info' then 'checking a window'
-    when 'window_move' then 'moving a window'
-    when 'window_resize' then 'resizing a window'
+    when 'window_list' then "listing #{whichs}"
+    when 'window_info' then "checking #{which}"
+    when 'window_move' then "moving #{which}"
+    when 'window_resize' then "resizing #{which}"
     when 'window_fullscreen'
-      if args.on is false or args.fullscreen is false then 'exiting window fullscreen'
-      else if args.on is true or args.fullscreen is true then 'making a window fullscreen'
-      else 'toggling window fullscreen'
-    when 'window_screenshot' then 'capturing a window'
-    when 'window_type' then 'typing into a window'
-    when 'window_click' then 'clicking a window'
+      if args.on is false or args.fullscreen is false then "exiting #{which} fullscreen"
+      else if args.on is true or args.fullscreen is true then "making #{which} fullscreen"
+      else "toggling #{which} fullscreen"
+    when 'window_screenshot' then "capturing #{which}"
+    when 'window_type' then "typing into #{which}"
+    when 'window_click' then "clicking #{which}"
     else 'using the computer'
 
 # Cap microagent latency; on timeout abort the agent and use deterministic fallback.
