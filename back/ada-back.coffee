@@ -1609,6 +1609,7 @@ main = ->
   fileMcp = process.env.ADA_FILE_MCP or '/workspace/mcp-file-io/server.mjs'
   compactMcp = process.env.ADA_COMPACT_MCP or '/workspace/mcp-compact/server.coffee'
   sandboxMcp = process.env.ADA_SANDBOX_MCP or '/workspace/mcp/sandbox/server.mjs'
+  computerMcp = process.env.ADA_COMPUTER_USE_MCP or '/workspace/mcp-computer-use/server.coffee'
   mcp = [
     name: 'home'
     prefix: false
@@ -1647,6 +1648,14 @@ main = ->
       NAMESPACE: process.env.NAMESPACE or 'agent-desktop'
       ADA_SANDBOX_TASKS: process.env.ADA_SANDBOX_TASKS or
         join(ADA_ROOT, '.angela/sandbox-tasks.json')
+  ,
+    name: 'computer-use'
+    prefix: false
+    command: bun
+    args: [computerMcp]
+    cwd: process.env.ADA_COMPUTER_USE_MCP_CWD or '/workspace/mcp-computer-use'
+    env: Object.assign { DISPLAY: process.env.DISPLAY or ':0' },
+      (if process.env.XAUTHORITY then { XAUTHORITY: process.env.XAUTHORITY } else {})
   ]
   mcp.push
     name: 'brain'

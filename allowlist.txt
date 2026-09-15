@@ -80,6 +80,11 @@ zen_media_play
 zen_media_pause
 zen_reveal
 
+# -- computer-use reads. move/resize/fullscreen/type/click go through Tom -----
+window_list
+window_info
+window_screenshot
+
 # -- filesystem reads (file-io, low). write_file/edit go through Tom ---------
 list_dir
 read_file

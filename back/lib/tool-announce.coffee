@@ -65,7 +65,44 @@ FAST_TOOLS = new Set [
   'shutdown'
   'compact_session_history'
   'context_analysis'
+  'window_list'
+  'window_info'
+  'window_move'
+  'window_resize'
+  'window_fullscreen'
+  'window_screenshot'
+  'window_type'
+  'window_click'
 ]
+
+mediaAnnounce = (args = {}) ->
+  switch args.action
+    when 'pause' then return 'pausing media'
+    when 'play' then return 'playing media'
+    when 'play-pause' then return 'toggling media'
+    when 'stop' then return 'stopping media'
+    when 'next' then return 'skipping to the next track'
+    when 'previous' then return 'going to the previous track'
+    when 'status' then return "checking what's playing"
+  if args.positionFraction? or args.positionSeconds? or args.seekBySeconds? then return 'seeking the track'
+  if args.playerVolume? then return 'setting player volume'
+  if args.volume? then return 'setting system volume'
+  "checking what's playing"
+
+computerAnnounce = (toolName, args = {}) ->
+  switch toolName
+    when 'window_list' then 'listing windows'
+    when 'window_info' then 'checking a window'
+    when 'window_move' then 'moving a window'
+    when 'window_resize' then 'resizing a window'
+    when 'window_fullscreen'
+      if args.on is false or args.fullscreen is false then 'exiting window fullscreen'
+      else if args.on is true or args.fullscreen is true then 'making a window fullscreen'
+      else 'toggling window fullscreen'
+    when 'window_screenshot' then 'capturing a window'
+    when 'window_type' then 'typing into a window'
+    when 'window_click' then 'clicking a window'
+    else 'using the computer'
 
 # Cap microagent latency; on timeout abort the agent and use deterministic fallback.
 ANNOUNCE_TIMEOUT_MS = 2000
@@ -92,7 +129,7 @@ export fallbackAnnounce = (toolName, args = {}) ->
     when 'timer__create' then 'starting a timer'
     when 'timer__dismiss' then 'stopping a timer'
     when 'timer__show' then 'opening timers'
-    when 'media_control' then 'controlling media'
+    when 'media_control' then mediaAnnounce args or {}
     when 'run_application' then "launching #{args.app or 'an app'}"
     when 'run_activity_command' then "running #{args.id or 'an activity'}"
     when 'shutdown' then 'starting shutdown'
@@ -105,6 +142,8 @@ export fallbackAnnounce = (toolName, args = {}) ->
     when 'work_duo' then 'approving Duo'
     when 'work_kvm' then 'opening the work laptop view'
     when 'work_kvm_close' then 'closing the work laptop view'
+    when 'window_list', 'window_info', 'window_move', 'window_resize', 'window_fullscreen', 'window_screenshot', 'window_type', 'window_click'
+      computerAnnounce toolName, args or {}
     else
       human = String(toolName or 'a tool').replace /_/g, ' '
       "running #{human}"
