@@ -54,6 +54,23 @@ scrolls caption history (last 256 lines, faded ones back in gray; exits
 after 10s without scrolling). Every spoken caption also appends to
 `logs/captions.log`. The pink pie on her dial ring shows context fullness.
 
+## Prompt Ada from another MCP client
+
+Ada exposes a **reverse** stdio MCP server that is *not* in her own tool
+catalog. Operators (or other agents) can submit a prompt into her existing
+session. It never barge-in over a live voice/tool turn; poll until she is ready.
+
+```
+cd /workspace/ada/back
+node ada-prompt.mjs "Stay on the current X tab and seek the video to about 50%."
+node ada-prompt.mjs --status            # readiness / session
+node ada-prompt.mjs --status <jobId>    # reply once finished
+```
+
+Or point an MCP client at `back/ada-mcp.mjs` (stdio). Tools: `ada_prompt`,
+`ada_prompt_status`. Same-user unix socket only. Jobs are in-memory and lost on
+`ada-back` restart. This does not bypass Tom / the allowlist.
+
 ## Install
 
 ```

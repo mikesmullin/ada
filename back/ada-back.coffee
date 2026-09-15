@@ -41,6 +41,10 @@ import {
 } from './lib/listen.coffee'
 import { compactContextWindow } from './lib/compact.coffee'
 import { registerAdaLocalTools } from './lib/ada-tools.coffee'
+import { startPromptControl } from './lib/prompt-control.mjs'
+import { BROWSER_GUIDE } from './lib/browser-guide.mjs'
+
+promptControl = null
 
 # Context reload flags. Declared HERE (above wrapToolsForUx), not near first
 # use: CoffeeScript scopes an assignment to the function being compiled when
@@ -115,7 +119,12 @@ wrapToolsForUx = (agent) ->
               out = result.r
             else
               out = await fn ctx, args
-            preview = String(out ? '').replace(/\s+/g, ' ').slice(0, 240)
+            preview = try
+              if Array.isArray out
+                JSON.stringify(out.map (p) -> if p?.type in ['image', 'image_url'] then { type: p.type } else p).slice 0, 240
+              else
+                String(out ? '').replace(/\s+/g, ' ').slice 0, 240
+            catch then '(unprintable)'
             log "tool ← #{name} #{preview}"
             # Compact tool that really rewrote this session: reload the
             # in-memory context at turn end (never mid-run). Dry runs and
@@ -138,6 +147,8 @@ wrapToolsForUx = (agent) ->
       wrapped._description = fn._description
       wrapped._properties = fn._properties
       wrapped._required = fn._required
+      wrapped._inputSchema = fn._inputSchema
+      wrapped._annotations = fn._annotations
       agent.tools[name] = wrapped
 
 # ---------------------------------------------------------------------------
@@ -900,7 +911,7 @@ loadSoul = ->
     log "no soul file at #{SOUL_PATH}"
     ''
 
-SYSTEM_PROMPT = loadSoul()
+SYSTEM_PROMPT = loadSoul() + '\n\n' + BROWSER_GUIDE
 
 soulDate = ->
   new Date().toLocaleString 'en-US',
@@ -964,7 +975,7 @@ runTurn = (utt, gate, retried = false) ->
   # Conversation latch on-switch: any addressed turn asking her to stay
   # opens the latch (covers wake, PTT, and listen-injected turns alike).
   # This turn answers normally; follow-ups ride the fuse ear.
-  if not conversing and CFG.conversationEnter.test String(utt.text or '')
+  if gate isnt 'external' and not conversing and CFG.conversationEnter.test String(utt.text or '')
     enterConversation 'phrase'
     gate = 'conversation'
   if currentTurn
@@ -980,6 +991,7 @@ runTurn = (utt, gate, retried = false) ->
     cancelled: false
     hadListen: false
     reply: ''
+    silent: gate is 'external' and not utt.speak
     lat:
       eou: if utt.t_end then utt.t_end * 1000 else null # unix ms, perception clock
       utteranceArrived: Date.now()
@@ -989,7 +1001,7 @@ runTurn = (utt, gate, retried = false) ->
       lastAudioDone: null
   currentTurn = turn
 
-  sfx 'activate' unless gate in ['ptt', 'conversation']
+  sfx 'activate' unless gate in ['ptt', 'conversation', 'external']
   gathering = false
   setEar 0 unless listenSession?
   setState thinking: true, active: (pttDown or conversing)
@@ -997,7 +1009,7 @@ runTurn = (utt, gate, retried = false) ->
 
   asideDepth = 0
   splitter = new SentenceSplitter (sentence) ->
-    return if turn.cancelled
+    return if turn.cancelled or turn.silent
     s = sentence.trim()
     # Parenthesized asides are thinking aloud: caption on screen, never voiced.
     # Depth-tracked so a span across the splitter (`(Let me check. Hmm.)`)
@@ -1016,6 +1028,7 @@ runTurn = (utt, gate, retried = false) ->
   turnSplitter = splitter
 
   runResult = null
+  runError = null
   try
     try
       adaHarness?.policy?.setAllowlist readFileSync(CFG.allowlistPath, 'utf8')
@@ -1024,9 +1037,11 @@ runTurn = (utt, gate, retried = false) ->
     if agent
       n = compactContextWindow agent, reserveTokens: CFG.contextReserveTokens
       log "turn #{turn.id}: compacted #{n} lines" if n
-    runResult = await adaSession.run prompt: stampUser utt.text
+    promptText = if gate is 'external' then "[External MCP prompt from operator; not microphone speech]\n#{utt.text}" else utt.text
+    runResult = await adaSession.run prompt: stampUser promptText
   catch e
     msg = String(e?.message or e or '')
+    runError = msg
     if isContextOverflow msg
       # Deterministic: the session no longer fits the server's context window.
       # First overflow in a while: say we're compacting, then do it below and
@@ -1038,13 +1053,13 @@ runTurn = (utt, gate, retried = false) ->
         ctxServerObserved = Number m[1]
         log "ctx floor observed from server: #{ctxServerObserved}"
       if Date.now() - lastAutoCompactAt > 600000
-        speaker.enqueue 'My conversation memory is full — compacting it now, one moment.', turn
+        speaker.enqueue 'My conversation memory is full — compacting it now, one moment.', turn unless turn.silent
         pendingAutoCompact = true
       else
-        speaker.enqueue 'My conversation memory is full, so I cannot take this turn. I need a fresh session before I can continue.', turn
+        speaker.enqueue 'My conversation memory is full, so I cannot take this turn. I need a fresh session before I can continue.', turn unless turn.silent
     else unless turn.cancelled or e?.aborted or /listen-empty/.test msg
       log "turn #{turn.id} error: #{msg}"
-      speaker.enqueue 'Sorry, something went wrong.', turn
+      speaker.enqueue 'Sorry, something went wrong.', turn unless turn.silent
     else
       log "turn #{turn.id} aborted: #{e.message}"
   splitter.flush()
@@ -1077,7 +1092,14 @@ runTurn = (utt, gate, retried = false) ->
   if didAutoCompact and not retried
     log "turn #{turn.id}: retrying after auto-compact"
     return await runTurn utt, gate, true
-  await maybeAutoListen turn, runResult
+  await maybeAutoListen turn, runResult unless gate is 'external'
+  {
+    status: if turn.cancelled then 'cancelled' else if runError then 'failed' else 'completed'
+    sessionId: adaSession.id
+    turnId: turn.id
+    reply: lastCompletion(runResult).content or turn.reply
+    error: runError
+  }
 
 cancelAll = (reason) ->
   # Avatar short-click: belay every remaining Tom challenge (current + queue).
@@ -1662,9 +1684,9 @@ main = ->
   await adaSession.listToolCatalog()
   registerAdaLocalTools adaSession.agent, voiceSock: CFG.voiceSock
   if adaSession.agent and await ensureMcpZen()
-    registerMcpZenTools adaSession.agent
-    nZen = Object.keys(adaSession.agent.tools).filter((t) -> t.startsWith 'agent_browser_').length
-    log "browser tools: direct (#{nZen} agent_browser_* on this agent)"
+    registerMcpZenTools adaSession.agent, policy: adaHarness.policy
+    nZen = Object.keys(adaSession.agent.tools).filter((t) -> t.startsWith('agent_browser_') or t.startsWith('zen_')).length
+    log "browser tools: direct (#{nZen} agent_browser_*/zen_* on this agent)"
   wrapToolsForUx adaSession.agent if adaSession.agent
   log "angela tools: #{Object.keys(adaSession.agent?.tools or {}).join ', '}"
   await updateCtxFullness()
@@ -1678,6 +1700,11 @@ main = ->
   catch e then null
   startAvatarServer()
   startVoiceSock()
+  promptControl = await startPromptControl
+    isBusy: -> Boolean(currentTurn or pttDown or gathering or conversing or listenSession or speaker.busy())
+    sessionId: -> adaSession.id
+    onPrompt: (job) -> runTurn { text: job.prompt, speak: job.speak, t_end: Date.now() / 1000 }, 'external'
+  log "external prompt control: #{promptControl.socketPath} (not in Ada's tool catalog)"
   connectWords()
   # Live pie: re-read server slot residency every 10s so the ring tracks
   # mid-turn growth (images attach mid-turn; turn-end accounting is stale).
@@ -1710,6 +1737,9 @@ main = ->
     catch e then null
     try
       unlinkSync CFG.voiceSock if existsSync CFG.voiceSock
+    catch e then null
+    try
+      promptControl?.close?()
     catch e then null
     try
       adaHarness?.close?()

@@ -74,7 +74,7 @@ export fallbackAnnounce = (toolName, args = {}) ->
   # Browser steps caption deterministically (never the microagent): they fire
   # several times per task and an LLM round-trip before each would double
   # step latency for zero extra clarity.
-  if String(toolName or '').startsWith 'agent_browser_'
+  if String(toolName or '').startsWith('agent_browser_') or String(toolName or '').startsWith('zen_')
     return browserAnnounce toolName, args or {}
   switch toolName
     when 'remember_fact', 'brain_put_entity' then 'saving that to memory'
@@ -133,6 +133,14 @@ browserAnnounce = (toolName, args = {}) ->
     when 'agent_browser_scroll', 'agent_browser_scroll_into_view' then 'scrolling'
     when 'agent_browser_wait_ms', 'agent_browser_wait_for_selector', 'agent_browser_wait_for_text', 'agent_browser_wait_for_url', 'agent_browser_wait_for_load' then 'waiting on the page'
     when 'agent_browser_eval' then 'running page script'
+    when 'zen_locate' then 'finding page elements'
+    when 'zen_reveal' then 'revealing page controls'
+    when 'zen_click_at' then "clicking #{clipArg a.selector or 'page element', 40}"
+    when 'zen_set_range' then 'setting a slider'
+    when 'zen_media_state' then 'checking the video'
+    when 'zen_media_seek' then 'seeking the video'
+    when 'zen_media_play' then 'playing the video'
+    when 'zen_media_pause' then 'pausing the video'
     else 'using the browser'
 
 cleanLine = (line, fallback) ->
@@ -182,7 +190,7 @@ export announceTool = ({ toolName, args, model, log, timeoutMs }) ->
 
   # Instant tools: never call the LLM (avoids multi-second hangs / nudge loops).
   # Browser steps are always instant-deterministic (see above) for the same reason.
-  if FAST_TOOLS.has(toolName) or String(toolName or '').startsWith('agent_browser_') or not model
+  if FAST_TOOLS.has(toolName) or String(toolName or '').startsWith('agent_browser_') or String(toolName or '').startsWith('zen_') or not model
     log? "announce (fast): #{fallback}"
     return fallback
 

@@ -1,95 +1,40 @@
-# Bridges mcp-zen's zen_* browser-control tools into agl-ai 1:1: one
-# agent.Tool() per tool the mcp-zen server exposes. ensureMcpZen deterministically
-# checks (and starts, if needed) the mcp-zen server before every browser-agent
-# call -- not just once at startup -- so a never-started or crashed mcp-zen
-# self-heals on the next browser task instead of being permanently disabled
-# for the rest of ada-back's process life.
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { spawn as spawnProcess } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+# MCP Zen browser tools on Ada; external ada_prompt tools are NOT registered here.
+import { BrowserBridge } from './browser-bridge.mjs'
 import { browserResult } from './browser-result.mjs'
 
-MCP_ZEN_URL = process.env.MCP_ZEN_URL or 'http://localhost:8791/mcp'
+bridge = new BrowserBridge()
 
-# Same pidfile + kill(pid, 0) liveness-check pattern as ada-back.coffee's own
-# acquireInstanceLock/releaseInstanceLock, checked against the lock mcp-zen's
-# server.ts writes on startup (same default path on that side).
-LOCK_PATH = process.env.MCP_ZEN_LOCK or "#{process.env.XDG_RUNTIME_DIR or '/tmp'}/mcp-zen.lock"
-START_TIMEOUT_MS = 15000
-POLL_INTERVAL_MS = 500
-
-client = null
-tools = []
-
-isMcpZenRunning = ->
-  try
-    pid = Number readFileSync(LOCK_PATH, 'utf8').trim()
-    return false unless pid
-    process.kill pid, 0 # throws if not running
-    true
-  catch e
-    false
-
-startMcpZenProcess = ->
-  console.error 'mcp-zen: not running, starting it...'
-  try
-    child = spawnProcess 'mcp-zen', [], detached: true, stdio: 'ignore'
-    child.unref()
-  catch e
-    console.error "mcp-zen: failed to spawn (#{e.message})"
-
-# Connects and discovers the tool list. Internal -- callers go through
-# ensureMcpZen, which decides whether this (and starting the process first)
-# is actually necessary.
-connectMcpZen = ->
-  try
-    transport = new StreamableHTTPClientTransport(new URL(MCP_ZEN_URL))
-    c = new Client name: 'ada-back', version: '0.1.0'
-    await c.connect transport
-    { tools: discovered } = await c.listTools()
-    client = c
-    tools = discovered
-    console.error "mcp-zen: #{tools.length} browser tools available (#{MCP_ZEN_URL})"
-    true
-  catch e
-    client = null
-    tools = []
-    console.error "mcp-zen: connect failed (#{e.message})"
-    false
-
-# Deterministically ensures mcp-zen is running (starting it via the `mcp-zen`
-# command on $PATH if the lock file shows no live pid) and that we're
-# connected to it, before any browser-agent tool call proceeds.
 export ensureMcpZen = ->
-  unless isMcpZenRunning()
-    startMcpZenProcess()
-    deadline = Date.now() + START_TIMEOUT_MS
-    until isMcpZenRunning()
-      if Date.now() > deadline
-        console.error "mcp-zen: did not start within #{START_TIMEOUT_MS}ms"
-        return false
-      await new Promise (resolve) -> setTimeout resolve, POLL_INTERVAL_MS
+  try
+    await bridge.ensure()
+  catch e
+    console.error "mcp-zen: #{e.message}"
+    false
 
-  return true if client and tools.length # already connected to the running instance
-  await connectMcpZen()
-
-export registerMcpZenTools = (agent) ->
-  for tool in tools
+export registerMcpZenTools = (agent, { policy } = {}) ->
+  for tool in bridge.tools
     do (tool) ->
       agent.Tool tool.name, tool.description or '',
         tool.inputSchema?.properties or {},
         tool.inputSchema?.required or [],
-        (ctx, args) ->
-          try
-            result = await client.callTool name: tool.name, arguments: args
-          catch e
-            # clear cached state so the next ensureMcpZen() call re-checks
-            # liveness and reconnects, instead of assuming this stale
-            # client/tools pair is still good.
-            client = null
-            tools = []
-            throw new Error "mcp-zen transport error: #{e.message}"
-          # A page-level failure is not a broken connection. Keep the client,
-          # but propagate failure; preserve screenshot image parts for vision.
+        (ctx, args = {}) ->
+          signal = ctx?.signal or agent._runAbort?.signal
+          signal?.throwIfAborted()
+          # Direct Agent.Tool registration does not automatically run Angela's
+          # MCP policy wrapper. All browser tools must cross this boundary too.
+          unless policy
+            throw new Error 'Browser policy is unavailable; refusing the call'
+          auth = await policy.authorize
+            tool: tool.name
+            server: 'mcp-zen'
+            mcpTool: tool.name
+            args: args
+          unless auth.allowed
+            throw new Error "Browser tool denied: #{tool.name}"
+          signal?.throwIfAborted()
+          result = await bridge.call tool.name, args, { signal }
           browserResult result, agent.model
+      # Keep full schema/annotations for inspection and policy-aware consumers.
+      # AGL currently exposes properties/required; MCP validates full schema.
+      agent.tools[tool.name]._inputSchema = tool.inputSchema
+      agent.tools[tool.name]._annotations = tool.annotations
