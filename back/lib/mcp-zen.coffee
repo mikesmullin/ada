@@ -8,6 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { spawn as spawnProcess } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import { browserResult } from './browser-result.mjs'
 
 MCP_ZEN_URL = process.env.MCP_ZEN_URL or 'http://localhost:8791/mcp'
 
@@ -20,10 +21,6 @@ POLL_INTERVAL_MS = 500
 
 client = null
 tools = []
-
-extractText = (result) ->
-  parts = (result.content or []).map (c) -> if c.type is 'text' then c.text else "[#{c.type}]"
-  parts.join('\n') or '(no output)'
 
 isMcpZenRunning = ->
   try
@@ -85,11 +82,14 @@ export registerMcpZenTools = (agent) ->
         tool.inputSchema?.required or [],
         (ctx, args) ->
           try
-            extractText await client.callTool name: tool.name, arguments: args
+            result = await client.callTool name: tool.name, arguments: args
           catch e
             # clear cached state so the next ensureMcpZen() call re-checks
             # liveness and reconnects, instead of assuming this stale
             # client/tools pair is still good.
             client = null
             tools = []
-            "mcp-zen error: #{e.message}"
+            throw new Error "mcp-zen transport error: #{e.message}"
+          # A page-level failure is not a broken connection. Keep the client,
+          # but propagate failure; preserve screenshot image parts for vision.
+          browserResult result, agent.model
