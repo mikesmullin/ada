@@ -447,12 +447,10 @@ reloadAgentContextFromDisk = ->
     log "context reload failed: #{e.message}"
     0
 
-# Context-window fullness 0..1 for the avatar pie ring. Denominator is the
-# honest limit: min(AGL's per-model table, the llama-server -c floor).
-# AGL's own lookup misfires on this config (returns its 32k fallback despite
-# the table entry), so read context_windows directly — same documented file.
-# Server -c isn't exposed by any llama-server API; precedence is
-# ADA_SERVER_CTX env > size observed in overflow errors > verified default.
+# Context-window fullness 0..1 for the avatar pie ring (updated at turn end).
+# Numerator: last completion usage.prompt_tokens (already on the response).
+# Denominator: AGL ~/.config/agl/config.yaml context_windows table (local file).
+# Overflow handling still tracks the llama-server -c floor separately below.
 ctxServerObserved = 0
 
 aglConfig = ->
@@ -495,34 +493,14 @@ updateCtxFullness = ->
   try
     store = adaHarness?.sessionStore
     return unless store and adaSession
-    used = null
-    denom = 0
-    # Live server truth first: /slots reports actual KV residency and n_ctx.
-    # Client-side counts systematically under-read (server adds vision tokens
-    # and its own accounting — observed 314k server vs 59k client), so the
-    # slot is the numerator whenever reachable; sidecar is fallback.
-    try
-      base = process.env.ADA_LLAMA_URL or 'http://127.0.0.1:1234'
-      res = await fetch "#{base}/slots"
-      if res.ok
-        slots = await res.json()
-        best = null
-        for x in slots or []
-          if (x?.n_prompt_tokens or 0) > (best?.n_prompt_tokens or 0)
-            best = x
-        if best
-          u = Number best.n_prompt_tokens
-          used = u if Number.isFinite(u) and u >= 0
-          d = Number best.n_ctx
-          denom = d if Number.isFinite(d) and d > 0
-    catch e then null
-    unless used?
+    used = Number adaSession.agent?.last_prompt_tokens
+    unless Number.isFinite(used) and used > 0
       st = store.load adaSession.id
       n = Number st?.lastPromptTokens
       used = n if Number.isFinite(n) and n > 0
-    return unless used?
-    unless denom > 0
-      { denom } = ctxDenominator()
+    return unless Number.isFinite(used) and used > 0
+    spec = CFG.model or aglDefaultModel()
+    denom = aglModelWindow spec
     return unless denom > 0
     frac = Math.max 0, Math.min 1, used / denom
     frac = Math.round(frac * 200) / 200
@@ -1698,7 +1676,6 @@ main = ->
     log "browser tools: direct (#{nZen} zen_browser_* on this agent)"
   wrapToolsForUx adaSession.agent if adaSession.agent
   log "angela tools: #{Object.keys(adaSession.agent?.tools or {}).join ', '}"
-  await updateCtxFullness()
   try
     b = ctxDenominator()
     log "ctx budget: model=#{b.spec} agl=#{b.agl} server=#{b.srv} → #{b.denom}"
@@ -1715,9 +1692,6 @@ main = ->
     onPrompt: (job) -> runTurn { text: job.prompt, speak: job.speak, t_end: Date.now() / 1000 }, 'external'
   log "external prompt control: #{promptControl.socketPath} (not in Ada's tool catalog)"
   connectWords()
-  # Live pie: re-read server slot residency every 10s so the ring tracks
-  # mid-turn growth (images attach mid-turn; turn-end accounting is stale).
-  setInterval (-> updateCtxFullness().catch -> null), 10000
   connectLevels CFG.perceptionSock, onLevelsFrame, log
   connectPresenceEvents()
   log "ada-back ready (voice=#{CFG.voice} tom=#{CFG.voiceTom} confirm=#{CFG.confirmEnabled} " +
