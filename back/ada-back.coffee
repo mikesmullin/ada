@@ -42,6 +42,17 @@ import {
 import { compactContextWindow } from './lib/compact.coffee'
 import { registerAdaLocalTools } from './lib/ada-tools.coffee'
 
+# Context reload flags. Declared HERE (above wrapToolsForUx), not near first
+# use: CoffeeScript scopes an assignment to the function being compiled when
+# no outer declaration has been seen *yet* — a later top-level `= false`
+# would NOT reclaim it, and the tool wrapper would silently write a per-call
+# local instead. (This exact bug ate the first auto-reload: flag set,
+# nothing reloaded.) Set when the compact tool rewrites this session's file;
+# performed at turn end (never mid-run — AGL iterates the array).
+pendingCtxReload = false
+pendingAutoCompact = false
+lastAutoCompactAt = 0
+
 # UX wrap only (announce caption + long-tool progress). Allowlist + Tom live
 # in Angela PolicyEngine (onApproval).
 wrapToolsForUx = (agent) ->
@@ -336,11 +347,13 @@ adaSession = null
 conversing = false
 conversationTimer = null
 
-# Context reload: set when the compact tool actually rewrites this session's
-# file; performed at turn end (never mid-run — AGL iterates the array).
-pendingCtxReload = false
-pendingAutoCompact = false
-lastAutoCompactAt = 0
+# NOTE: pendingCtxReload / pendingAutoCompact / lastAutoCompactAt are
+# declared ABOVE wrapToolsForUx (top of file) on purpose. CoffeeScript
+# scopes an assignment to the function being compiled when no outer
+# declaration has been seen *yet* — a later top-level `= false` would NOT
+# reclaim it, and the tool wrapper would silently write a per-call local
+# instead. (This exact bug ate the first auto-reload: flag set, nothing
+# reloaded.)
 
 # Direct MCP call to the compact server (same tool the model uses, but invoked
 # by the back itself for automatic recovery — no Tom round-trip by design).
