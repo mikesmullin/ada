@@ -1,6 +1,7 @@
 # Ada tool allowlist (deny-by-default). Re-read on every tool call.
-# Format (gl1 Lucy/Rosa): one rule per line — `tool` or `tool:params`
-# `*` wildcards ok. Lines starting with # are comments.
+# Format (gl1 / Angela): one rule per line — `tool` or `tool:params`
+# Patterns are full-match regex, not globs: `.` any char, `*` repeats.
+# `zen_browser_.*` allows every zen_browser_* tool. Lines starting with # are comments.
 #
 # House tools are unprefixed (home MCP prefix:false).
 # Work tools are unprefixed (work MCP prefix:false) and omitted so Tom
@@ -54,7 +55,7 @@ agents_status
 agents_wait
 
 # -- host browser (Ada may drive the attached Zen freely; no Tom) ---
-zen_browser_*
+zen_browser_.*
 
 # -- computer-use reads. move/resize/fullscreen/type/click go through Tom -----
 window_list
