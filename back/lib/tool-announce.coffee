@@ -73,6 +73,7 @@ FAST_TOOLS = new Set [
   'window_screenshot'
   'window_type'
   'window_click'
+  'cursor_position'
 ]
 
 mediaAnnounce = (args = {}) ->
@@ -116,6 +117,7 @@ computerAnnounce = (toolName, args = {}) ->
     when 'window_screenshot' then "capturing #{which}"
     when 'window_type' then "typing into #{which}"
     when 'window_click' then "clicking #{which}"
+    when 'cursor_position' then 'reading the cursor'
     else 'using the computer'
 
 # Cap microagent latency; on timeout abort the agent and use deterministic fallback.
@@ -156,7 +158,7 @@ export fallbackAnnounce = (toolName, args = {}) ->
     when 'work_duo' then 'approving Duo'
     when 'work_kvm' then 'opening the work laptop view'
     when 'work_kvm_close' then 'closing the work laptop view'
-    when 'window_list', 'window_info', 'window_move', 'window_resize', 'window_fullscreen', 'window_screenshot', 'window_type', 'window_click'
+    when 'window_list', 'window_info', 'window_move', 'window_resize', 'window_fullscreen', 'window_screenshot', 'window_type', 'window_click', 'cursor_position'
       computerAnnounce toolName, args or {}
     else
       human = String(toolName or 'a tool').replace /_/g, ' '

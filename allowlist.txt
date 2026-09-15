@@ -61,6 +61,7 @@ zen_browser_.*
 window_list
 window_info
 window_screenshot
+cursor_position
 
 # -- filesystem reads (file-io, low). write_file/edit go through Tom ---------
 list_dir
