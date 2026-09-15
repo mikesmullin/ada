@@ -194,6 +194,10 @@ browserAnnounce = (toolName, args = {}) ->
     when 'zen_media_seek' then 'seeking the video'
     when 'zen_media_play' then 'playing the video'
     when 'zen_media_pause' then 'pausing the video'
+    when 'zen_media_fullscreen'
+      if a.on is false then 'exiting video fullscreen'
+      else if a.on is true then 'making the video fullscreen'
+      else 'toggling video fullscreen'
     else 'using the browser'
 
 cleanLine = (line, fallback) ->
