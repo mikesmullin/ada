@@ -68,5 +68,6 @@ grep
 find
 stat
 
-# -- context analysis (compact, low). compact_session_history stays Tom-gated -
+# -- context (mcp-compact). analysis + compact run without Tom -----------------
 context_analysis
+compact_session_history

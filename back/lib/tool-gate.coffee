@@ -114,6 +114,9 @@ DEFAULT_RISK =
   stat: 'low'
   write_file: 'medium'
   edit: 'medium'
+  # Session compact (mcp-compact): weigh + trim her own context without Tom.
+  context_analysis: 'low'
+  compact_session_history: 'low'
 
 export riskOf = (toolName, configRisk = {}) ->
   r = configRisk[toolName] ? DEFAULT_RISK[toolName] ? 'medium'
