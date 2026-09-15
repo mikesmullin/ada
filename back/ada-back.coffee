@@ -914,14 +914,14 @@ loadSoul = ->
 SYSTEM_PROMPT = loadSoul() + '\n\n' + BROWSER_GUIDE
 
 soulDate = ->
-  new Date().toLocaleString 'en-US',
+  d = new Date()
+  date = d.toLocaleDateString 'en-US',
     weekday: 'long'
     year: 'numeric'
     month: 'long'
     day: 'numeric'
-    hour: 'numeric'
-    minute: '2-digit'
-    timeZoneName: 'long'
+  tz = (p.value for p in new Intl.DateTimeFormat('en-US', timeZoneName: 'long').formatToParts(d) when p.type is 'timeZoneName')[0]
+  if tz then "#{date} (#{tz})" else date
 
 soulUname = ->
   try
