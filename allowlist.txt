@@ -33,13 +33,15 @@ tail_eavesdrop_transcript
 goto
 loop_start_marker
 
-# -- brain reads ------------------------------------------------------------
+# -- brain (reads + put + delete). method_invoke stays Tom-gated ------------
 brain__search
 brain__think
 brain__ontology
 brain__graph
 brain__graphql
 brain__get_entity
+brain__put_entity
+brain__delete_entity
 brain__schema_methods
 brain__schema_orphans
 
