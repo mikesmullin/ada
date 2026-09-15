@@ -70,7 +70,7 @@ wrapToolsForUx = (agent) ->
           # listen arms immediately — announce would delay the waiter (~2s)
           # and drop speech as (unaddressed). Caption is `(listening)`.
           # Browser steps caption via the instant deterministic path
-          # (tool-announce forces agent_browser_* off the LLM).
+          # (tool-announce forces zen_browser_* off the LLM).
           unless name is 'listen'
             try
               line = await announceTool
@@ -1694,8 +1694,8 @@ main = ->
   registerAdaLocalTools adaSession.agent, voiceSock: CFG.voiceSock
   if adaSession.agent and await ensureMcpZen()
     registerMcpZenTools adaSession.agent, policy: adaHarness.policy
-    nZen = Object.keys(adaSession.agent.tools).filter((t) -> t.startsWith('agent_browser_') or t.startsWith('zen_')).length
-    log "browser tools: direct (#{nZen} agent_browser_*/zen_* on this agent)"
+    nZen = Object.keys(adaSession.agent.tools).filter((t) -> t.startsWith 'zen_browser_').length
+    log "browser tools: direct (#{nZen} zen_browser_* on this agent)"
   wrapToolsForUx adaSession.agent if adaSession.agent
   log "angela tools: #{Object.keys(adaSession.agent?.tools or {}).join ', '}"
   await updateCtxFullness()

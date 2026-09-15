@@ -54,8 +54,7 @@ agents_status
 agents_wait
 
 # -- host browser (Ada may drive the attached Zen freely; no Tom) ---
-agent_browser_*
-zen_*
+zen_browser_*
 
 # -- computer-use reads. move/resize/fullscreen/type/click go through Tom -----
 window_list

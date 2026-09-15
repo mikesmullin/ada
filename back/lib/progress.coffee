@@ -6,13 +6,13 @@ import { normalizeSpeech } from './petname.coffee'
 DEFAULT_LONG_TOOLS = [
   'run_activity_command'
   'run_application'
-  'agent_browser_open'
-  'agent_browser_wait_ms'
-  'agent_browser_wait_for_selector'
-  'agent_browser_wait_for_text'
-  'agent_browser_wait_for_url'
-  'agent_browser_wait_for_load'
-  'agent_browser_eval'
+  'zen_browser_open'
+  'zen_browser_wait_ms'
+  'zen_browser_wait_for_selector'
+  'zen_browser_wait_for_text'
+  'zen_browser_wait_for_url'
+  'zen_browser_wait_for_load'
+  'zen_browser_eval'
 ]
 
 active = null # { toolName, started, cancelPrefix, resolveCancel, timer, speak, ... }
@@ -139,9 +139,9 @@ export startProgress = ({
 humanTool = (toolName, args) ->
   a = args or {}
   switch toolName
-    when 'agent_browser_open' then "opening #{clip a.url or 'page', 60}"
-    when 'agent_browser_eval' then 'running page script'
-    when 'agent_browser_wait_ms', 'agent_browser_wait_for_selector', 'agent_browser_wait_for_text', 'agent_browser_wait_for_url', 'agent_browser_wait_for_load' then 'waiting on the page'
+    when 'zen_browser_open' then "opening #{clip a.url or 'page', 60}"
+    when 'zen_browser_eval' then 'running page script'
+    when 'zen_browser_wait_ms', 'zen_browser_wait_for_selector', 'zen_browser_wait_for_text', 'zen_browser_wait_for_url', 'zen_browser_wait_for_load' then 'waiting on the page'
     when 'run_activity_command' then "activity #{a.id or 'command'}"
     when 'run_application' then "launching #{a.app or 'app'}"
     else toolName

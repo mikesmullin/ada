@@ -125,7 +125,7 @@ export fallbackAnnounce = (toolName, args = {}) ->
   # Browser steps caption deterministically (never the microagent): they fire
   # several times per task and an LLM round-trip before each would double
   # step latency for zero extra clarity.
-  if String(toolName or '').startsWith('agent_browser_') or String(toolName or '').startsWith('zen_')
+  if String(toolName or '').startsWith 'zen_browser_'
     return browserAnnounce toolName, args or {}
   switch toolName
     when 'remember_fact', 'brain_put_entity' then 'saving that to memory'
@@ -168,33 +168,33 @@ browserAnnounce = (toolName, args = {}) ->
     t = String(v or '').replace(/\s+/g, ' ').trim()
     if t.length <= n then t else t.slice(0, n - 1) + '…'
   switch toolName
-    when 'agent_browser_open' then "opening #{clipArg a.url or 'page'}"
-    when 'agent_browser_tab_list' then 'listing tabs'
-    when 'agent_browser_tab_new' then 'opening a tab'
-    when 'agent_browser_tab_close' then 'closing a tab'
-    when 'agent_browser_tab_switch' then 'switching tabs'
-    when 'agent_browser_snapshot' then 'reading the page'
-    when 'agent_browser_get_text' then 'reading page text'
-    when 'agent_browser_get_url', 'agent_browser_get_title' then 'checking the page'
-    when 'agent_browser_screenshot' then 'taking a screenshot'
-    when 'agent_browser_click' then "clicking #{clipArg a.text or a.ref or a.selector or 'page element', 40}"
-    when 'agent_browser_fill', 'agent_browser_type' then 'filling a form'
-    when 'agent_browser_select', 'agent_browser_check', 'agent_browser_uncheck' then 'choosing an option'
-    when 'agent_browser_back' then 'going back'
-    when 'agent_browser_forward' then 'going forward'
-    when 'agent_browser_reload' then 'reloading the page'
-    when 'agent_browser_scroll', 'agent_browser_scroll_into_view' then 'scrolling'
-    when 'agent_browser_wait_ms', 'agent_browser_wait_for_selector', 'agent_browser_wait_for_text', 'agent_browser_wait_for_url', 'agent_browser_wait_for_load' then 'waiting on the page'
-    when 'agent_browser_eval' then 'running page script'
-    when 'zen_locate' then 'finding page elements'
-    when 'zen_reveal' then 'revealing page controls'
-    when 'zen_click_at' then "clicking #{clipArg a.selector or 'page element', 40}"
-    when 'zen_set_range' then 'setting a slider'
-    when 'zen_media_state' then 'checking the video'
-    when 'zen_media_seek' then 'seeking the video'
-    when 'zen_media_play' then 'playing the video'
-    when 'zen_media_pause' then 'pausing the video'
-    when 'zen_media_fullscreen'
+    when 'zen_browser_open' then "opening #{clipArg a.url or 'page'}"
+    when 'zen_browser_tab_list' then 'listing tabs'
+    when 'zen_browser_tab_new' then 'opening a tab'
+    when 'zen_browser_tab_close' then 'closing a tab'
+    when 'zen_browser_tab_switch' then 'switching tabs'
+    when 'zen_browser_snapshot' then 'reading the page'
+    when 'zen_browser_get_text' then 'reading page text'
+    when 'zen_browser_get_url', 'zen_browser_get_title' then 'checking the page'
+    when 'zen_browser_screenshot' then 'taking a screenshot'
+    when 'zen_browser_click' then "clicking #{clipArg a.text or a.ref or a.selector or 'page element', 40}"
+    when 'zen_browser_fill', 'zen_browser_type' then 'filling a form'
+    when 'zen_browser_select', 'zen_browser_check', 'zen_browser_uncheck' then 'choosing an option'
+    when 'zen_browser_back' then 'going back'
+    when 'zen_browser_forward' then 'going forward'
+    when 'zen_browser_reload' then 'reloading the page'
+    when 'zen_browser_scroll', 'zen_browser_scroll_into_view' then 'scrolling'
+    when 'zen_browser_wait_ms', 'zen_browser_wait_for_selector', 'zen_browser_wait_for_text', 'zen_browser_wait_for_url', 'zen_browser_wait_for_load' then 'waiting on the page'
+    when 'zen_browser_eval' then 'running page script'
+    when 'zen_browser_locate' then 'finding page elements'
+    when 'zen_browser_reveal' then 'revealing page controls'
+    when 'zen_browser_click_at' then "clicking #{clipArg a.selector or 'page element', 40}"
+    when 'zen_browser_set_range' then 'setting a slider'
+    when 'zen_browser_media_state' then 'checking the video'
+    when 'zen_browser_media_seek' then 'seeking the video'
+    when 'zen_browser_media_play' then 'playing the video'
+    when 'zen_browser_media_pause' then 'pausing the video'
+    when 'zen_browser_media_fullscreen'
       if a.on is false then 'exiting video fullscreen'
       else if a.on is true then 'making the video fullscreen'
       else 'toggling video fullscreen'
@@ -247,7 +247,7 @@ export announceTool = ({ toolName, args, model, log, timeoutMs }) ->
 
   # Instant tools: never call the LLM (avoids multi-second hangs / nudge loops).
   # Browser steps are always instant-deterministic (see above) for the same reason.
-  if FAST_TOOLS.has(toolName) or String(toolName or '').startsWith('agent_browser_') or String(toolName or '').startsWith('zen_') or not model
+  if FAST_TOOLS.has(toolName) or String(toolName or '').startsWith('zen_browser_') or not model
     log? "announce (fast): #{fallback}"
     return fallback
 
