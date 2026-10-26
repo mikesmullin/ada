@@ -1741,7 +1741,7 @@ main = ->
     retain_history: true
     stream: true
     parallel_tools: true
-    reasoning_effort: 'low'
+    reasoning_effort: 'xhigh'
     policyMode: 'ask'
     allowlist: readAllowlistText()
     onApproval: tomApprover

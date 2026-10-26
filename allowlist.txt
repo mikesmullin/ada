@@ -67,14 +67,15 @@ image_crop
 describe_image
 decide
 
-# -- shared vision and phone observations; phone input keeps Tom approval ---
+# -- shared vision + all phone tools; phone input is now free (no Tom) ----
 image_ocr
 image_describe
 image_decide
-phone_screenshot
-phone_info
-phone_find_element
-phone_ui_dump
+# phone_.* covers every phone-use tool: phone_screenshot / phone_info /
+# phone_ui_dump / phone_find_element (observations) plus phone_click /
+# phone_long_press / phone_type / phone_key / phone_keyboard /
+# phone_clear_text / phone_swipe / phone_interact (input).
+phone_.*
 
 # -- filesystem reads (file-io, low). write_file/edit go through Tom ---------
 list_dir
