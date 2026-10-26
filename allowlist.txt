@@ -61,7 +61,20 @@ zen_browser_.*
 
 # -- computer-use (Ada may move/click/type on the desktop freely; no Tom) ---
 window_.*
-cursor_position
+browser_page_find
+browser_screenshot
+image_crop
+describe_image
+decide
+
+# -- shared vision and phone observations; phone input keeps Tom approval ---
+image_ocr
+image_describe
+image_decide
+phone_screenshot
+phone_info
+phone_find_element
+phone_ui_dump
 
 # -- filesystem reads (file-io, low). write_file/edit go through Tom ---------
 list_dir
@@ -73,3 +86,9 @@ stat
 # -- context (mcp-compact). analysis + compact run without Tom -----------------
 context_analysis
 compact_session_history
+
+# clear_session_history (mcp-compact) is intentionally NOT allowlisted: a full
+# memory reset goes through Tom (confirm phrase) even though it is hers to run.
+
+# -- skill lookup (mcp-skills); read-only file lookup, no Tom
+skills

@@ -117,6 +117,9 @@ DEFAULT_RISK =
   # Session compact (mcp-compact): weigh + trim her own context without Tom.
   context_analysis: 'low'
   compact_session_history: 'low'
+  # Skill lookup (mcp-skills): pure read of the known SKILL.md set, no
+  # path input, no writes — same class as file/context reads, no Tom.
+  skills: 'low'
 
 export riskOf = (toolName, configRisk = {}) ->
   r = configRisk[toolName] ? DEFAULT_RISK[toolName] ? 'medium'

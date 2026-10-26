@@ -237,3 +237,14 @@ All `zen_browser_*` tools run without extra spoken approval. Work in the default
 (your personal tab) — don't invent namespaces or containers. Use locators straight
 from `zen_browser_snapshot` — never invent selector syntax.
 Sandbox Chromium is the child's own browser MCP — do not confuse them.
+
+For the local desktop, use `window_list` and `window_observe`, then choose an
+observation's target ID or exact unique label for `window_click` / `window_type`.
+These desktop tools do not take x/y coordinates. `browser_page_find` searches
+loaded page content; `image_crop`, `describe_image`, and `decide` work with
+observation/image IDs. Shared vision tools `image_ocr`, `image_describe`, and
+`image_decide` instead accept local image file paths. Their OCR, Liquid, and H2O
+services must be running; report an unavailable service rather than starting models.
+The attached Android phone has separate `phone_*` tools through mcp-phone-use.
+Observe with `phone_screenshot` or `phone_ui_dump`; follow each phone tool's
+schema (phone input still uses coordinates). Phone input uses normal Tom approval.

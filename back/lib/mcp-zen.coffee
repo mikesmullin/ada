@@ -11,7 +11,7 @@ export ensureMcpZen = ->
     console.error "mcp-zen: #{e.message}"
     false
 
-export registerMcpZenTools = (agent, { policy } = {}) ->
+export registerMcpZenTools = (agent, { policy, supportsImages } = {}) ->
   for tool in bridge.tools
     do (tool) ->
       agent.Tool tool.name, tool.description or '',
@@ -33,7 +33,7 @@ export registerMcpZenTools = (agent, { policy } = {}) ->
             throw new Error "Browser tool denied: #{tool.name}"
           signal?.throwIfAborted()
           result = await bridge.call tool.name, args, { signal }
-          browserResult result, agent.model
+          browserResult result, agent.model, supportsImages
       # Keep full schema/annotations for inspection and policy-aware consumers.
       # AGL currently exposes properties/required; MCP validates full schema.
       agent.tools[tool.name]._inputSchema = tool.inputSchema

@@ -24,10 +24,23 @@ brain_path: /workspace/ada/db
 # Provider inference rounds per Agent.run (Angela). AGL default is 5.
 max_turns: 20
 
+# Tool registration limit for Ada's combined MCP catalog.
+max_tools: 256
+
 # Token reserve when line-compacting the immortal Angela session
 # (near live n_ctx from agl). Context lives in .angela/sessions/.
 context:
   compact_reserve_tokens: 8000
+
+# Images in flight: screenshots and pictures attached to tool results.
+# keep: newest N image blocks sent per provider request (older become a
+#   short text placeholder; the saved session keeps every image). Guards
+#   servers with per-request image caps (vLLM allows 20; some allow 0).
+# vision: does this server actually accept image parts? false = text-only
+#   tool results (for vision-less servers behind a multimodal model label).
+images:
+  keep: 10
+  vision: false
 
 # Shared task list (M2 — path locked; todo MCP later).
 task_lists:

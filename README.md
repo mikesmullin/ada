@@ -25,8 +25,11 @@ Design doc: [docs/PLAN.md](docs/PLAN.md) · wire spec: [docs/PROTOCOL.md](docs/P
   `listen` tool) → Angela `session.run` (retained context in
   `.angela/sessions/`) → per-sentence TTS. House tools are the standalone
   MCP stdio server [`mcp-home`](/workspace/mcp-home); work-laptop session
-  tools are [`mcp-work`](/workspace/mcp-work); brain and todo are
-  existing MCP servers. `listen` and `control_browser` stay on Ada.
+  tools are [`mcp-work`](/workspace/mcp-work); skill-file lookup is
+  [`mcp-skills`](/workspace/mcp-skills) (the `skills` CLI as a single
+  `skills(name?)` tool); brain and todo are existing MCP servers. Ada also loads `mcp-computer-use`, `mcp-phone-use`, and
+  `mcp-vision` over stdio, plus `mcp-zen` over HTTP with direct `zen_browser_*`
+  tools. `listen` stays on Ada.
 
 ## Run
 
@@ -107,6 +110,13 @@ without touching the file — the env var always wins when set.
 | `ADA_VOICE_SOCK` | `$XDG_RUNTIME_DIR/ada-voice.sock` (`listen` tool shim) |
 | `ADA_HOME_MCP` | `/workspace/mcp-home/server.coffee` |
 | `ADA_WORK_MCP` | `/workspace/mcp-work/server.coffee` |
+| `ADA_COMPUTER_USE_MCP` | `/workspace/mcp-computer-use/server.coffee` |
+| `ADA_PHONE_MCP` | `/workspace/mcp-phone-use/server.coffee` |
+| `ADA_VISION_MCP` | `/workspace/mcp-vision/server.mjs` |
+| `ADA_SKILLS_MCP` | `/workspace/mcp-skills/server.coffee` — spawned as `bun --preload <reg> <server>`; the absolute `--preload` makes it robust to any cwd (Bun only honors bunfig.toml from the exact process cwd) |
+| `ADA_SKILLS_REG` | CoffeeScript preload, default `<server dir>/node_modules/bun-coffeescript/register.ts` |
+| `ADA_SKILLS_MCP_CWD` | `/workspace/mcp-skills` |
+| `MCP_ZEN_URL` | `http://localhost:8791/mcp` |
 | `ADA_SOUL` | `SOUL.md` (repo root) — standing knowledge loaded into her system prompt at startup; `{{date}}` `{{uname}}` `{{shell}}` interpolated via agl `locals` |
 | `ADA_CONFIG` | `config.yaml` (repo root) |
 | `ADA_SELFTEST` | unset — set to a phrase to run one synthetic turn (no mic) |

@@ -16,7 +16,9 @@ zig-pkg/
 .env
 # Structured agent logs (local only)
 /logs/
-# Angela session jsonl (immortal context; local only)
+# Angela sessions (immortal context; local only) — everything under
+# .angela/sessions/ is ignored, including the sessions/backup/ folder where
+# clear_session_history parks cleared session files.
 /.angela/sessions/
 /.angela/ada-session
 # Instance lock / sockets

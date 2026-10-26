@@ -53,8 +53,12 @@ promptControl = null
 # local instead. (This exact bug ate the first auto-reload: flag set,
 # nothing reloaded.) Set when the compact tool rewrites this session's file;
 # performed at turn end (never mid-run — AGL iterates the array).
+# Set when clear_session_history has swapped the pointer to a new session id.
+# Performed at turn end (never mid-run) by re-opening the session the pointer
+# now names, so the in-memory agent follows the on-disk session.
 pendingCtxReload = false
 pendingAutoCompact = false
+pendingSessionSwap = false
 lastAutoCompactAt = 0
 
 # UX wrap only (announce caption + long-tool progress). Allowlist + Tom live
@@ -136,6 +140,16 @@ wrapToolsForUx = (agent) ->
                     Number(res.eventsAfter) < Number(res.eventsBefore)
                   pendingCtxReload = true
                   log "compact ran (#{res.eventsBefore}→#{res.eventsAfter}); reload at turn end"
+              catch e then null
+            # A session clear that really swapped the pointer: the old session
+            # file is gone, so a disk reload is useless — re-open the session
+            # the pointer now names at turn end instead.
+            if name is 'clear_session_history'
+              try
+                res = JSON.parse String(out ? '')
+                if res and res.dryRun is false and res.session is adaSession?.id and res.newSession
+                  pendingSessionSwap = true
+                  log "clear ran (#{res.session} -> #{res.newSession}); re-open at turn end"
               catch e then null
             out
           catch e
@@ -254,19 +268,25 @@ CFG =
   progressTools: config.progress?.tools or []
   contextReserveTokens: Number(process.env.ADA_CONTEXT_RESERVE_TOKENS or
     config.context?.compact_reserve_tokens or 8000)
+  imagesKeep: Number(process.env.ADA_IMAGES_KEEP ? config.images?.keep ? 10)
+  imagesVision: (process.env.ADA_IMAGES_VISION ? config.images?.vision ? true) in [true, 'true', '1', 'yes']
   listenStartSec: Number(process.env.ADA_LISTEN_TIMEOUT or 6)
   slopSec: 0.3
   maxTurns: Math.max 1, Number(process.env.ADA_MAX_TURNS or config.max_turns or 20) or 20
 
 log = (a...) -> console.log "[#{new Date().toISOString().slice 11, 23}]", a...
 
-# Context-overflow detector: llama-server rejects with 400-class errors when
-# the prompt no longer fits its -c window (e.g. `request (302702 tokens)
-# exceeds the available context size (262144 tokens)`), but our provider
-# wrapper flattens that to a bare `400 Bad Request`. Match the status and
-# every overflow phrasing we might see through the wrapper.
+# Error classifiers for failed provider turns. The provider wrapper used to
+# flatten everything to a bare `400 Bad Request`; AGL now appends the
+# server's own `(code: message)`. Classify on the server's signal, not the
+# bare status — a vision rejection is NOT a full context (compacting on it
+# once wiped 120 live tool events for nothing).
+isVisionError = (msg) ->
+  /vision.{0,24}disabled|images?.{0,16}(not supported|unsupported)|does not support (vision|images)|no vision|image_url|vision_/i.test String(msg or '')
+
 isContextOverflow = (msg) ->
-  /exceeds the available context size|context (window|length|size|limit)|prompt too (long|large)|max(imum)? (context|tokens)|too many tokens|request entity too large|\b(400|413|422|431)\b/i.test String(msg or '')
+  return false if isVisionError msg
+  /exceeds the available context size|context (window|length|size|limit)|prompt too (long|large)|max(imum)? (context|tokens)|too many tokens|request entity too large|context_length_exceeded|\b(413|431)\b/i.test String(msg or '')
 
 # Chat-log stamp for user speech entering the LLM: `Sun, Sep 6 @ 5:21p | hello ada`.
 # Local time, 12-hour, no leading zero — matches how Mike reads the clock.
@@ -1020,7 +1040,14 @@ runTurn = (utt, gate, retried = false) ->
   catch e
     msg = String(e?.message or e or '')
     runError = msg
-    if isContextOverflow msg
+    if isVisionError msg
+      # The server refused image parts (e.g. ninfer `vision_disabled`): the
+      # request was well-formed, the model host just can't take pictures.
+      # Never compact on this — the context fits fine; the fix is to stop
+      # attaching images (images.vision in config.yaml), not to wipe memory.
+      log "turn #{turn.id} VISION ERROR (server takes no images): #{msg}"
+      speaker.enqueue 'That step failed — I tried to send a picture, but this picture server cannot take images.', turn unless turn.silent
+    else if isContextOverflow msg
       # Deterministic: the session no longer fits the server's context window.
       # First overflow in a while: say we're compacting, then do it below and
       # retry this same turn once. Repeat offender (still full after a recent
@@ -1058,6 +1085,19 @@ runTurn = (utt, gate, retried = false) ->
       pendingCtxReload = false
       await reloadAgentContextFromDisk()
 
+
+  # A real session clear has moved the pointer to a brand-new id. Re-open
+  # that session and re-wire its tools (the old file no longer exists, so a
+  # disk context reload would be empty). The next turn then continues from
+  # the new session's blackboard instead of the gone old context.
+  if pendingSessionSwap
+    pendingSessionSwap = false
+    try
+      adaSession = await openOrCreateSession adaHarness
+      await setupSession adaSession
+      log "session clear: re-opened #{adaSession.id}"
+    catch e
+      log "session re-open after clear failed: #{e.message}"
   # latency report (plan §7)
   l = turn.lat
   ms = (v) -> if v is null then ' n/a' else "#{Math.round v - l.start}ms"
@@ -1514,6 +1554,24 @@ persistSessionId = (id) ->
   catch e
     log "session id write failed: #{e.message}"
 
+# Wire up everything needed for a session to start taking turns: tool catalog,
+# the ada-only local tools (listen), the direct zen browser tools, and the UX
+# tool wrappers. Called at startup and again whenever the live session is
+# swapped (e.g. after a clear_session_history new-session re-open).
+setupSession = (sess) ->
+  await sess.listToolCatalog()
+  registerAdaLocalTools sess.agent, voiceSock: CFG.voiceSock
+  if sess.agent and await ensureMcpZen()
+    # Apply Ada's configured limit to the combined MCP catalog.
+    sess.agent.max_tools = config.max_tools ? 256
+    registerMcpZenTools sess.agent,
+      policy: adaHarness.policy
+      supportsImages: adaHarness.supportsImages
+    nZen = Object.keys(sess.agent.tools).filter((t) -> t.startsWith 'zen_browser_').length
+    log "browser tools: direct (#{nZen} zen_browser_* on this agent)"
+  wrapToolsForUx sess.agent if sess.agent
+  log "angela tools: #{Object.keys(sess.agent?.tools or {}).join ', '}"
+
 openOrCreateSession = (harness) ->
   id = null
   try
@@ -1588,6 +1646,13 @@ main = ->
   compactMcp = process.env.ADA_COMPACT_MCP or '/workspace/mcp-compact/server.coffee'
   sandboxMcp = process.env.ADA_SANDBOX_MCP or '/workspace/mcp/sandbox/server.mjs'
   computerMcp = process.env.ADA_COMPUTER_USE_MCP or '/workspace/mcp-computer-use/server.coffee'
+  phoneMcp = process.env.ADA_PHONE_MCP or '/workspace/mcp-phone-use/server.coffee'
+  visionMcp = process.env.ADA_VISION_MCP or '/workspace/mcp-vision/server.mjs'
+  # skills: MCP exposure of the `skills` CLI core. `--preload` is pinned to an
+  # absolute register path because Bun only honors bunfig.toml from the exact
+  # process cwd (verified); this makes the spawn robust to any cwd.
+  skillsMcp = process.env.ADA_SKILLS_MCP or '/workspace/mcp-skills/server.coffee'
+  skillsReg = process.env.ADA_SKILLS_REG or join(dirname(skillsMcp), 'node_modules/bun-coffeescript/register.ts')
   mcp = [
     name: 'home'
     prefix: false
@@ -1634,6 +1699,24 @@ main = ->
     cwd: process.env.ADA_COMPUTER_USE_MCP_CWD or '/workspace/mcp-computer-use'
     env: Object.assign { DISPLAY: process.env.DISPLAY or ':0' },
       (if process.env.XAUTHORITY then { XAUTHORITY: process.env.XAUTHORITY } else {})
+  ,
+    name: 'phone-use'
+    prefix: false
+    command: bun
+    args: [phoneMcp]
+    cwd: process.env.ADA_PHONE_MCP_CWD or '/workspace/mcp-phone-use'
+  ,
+    name: 'vision'
+    prefix: false
+    command: bun
+    args: [visionMcp]
+    cwd: process.env.ADA_VISION_MCP_CWD or '/workspace/mcp-vision'
+  ,
+    name: 'skills'
+    prefix: false
+    command: bun
+    args: ['--preload', skillsReg, skillsMcp]
+    cwd: process.env.ADA_SKILLS_MCP_CWD or '/workspace/mcp-skills'
   ]
   mcp.push
     name: 'brain'
@@ -1666,16 +1749,11 @@ main = ->
     persistSessions: true
     on_delta: onHarnessDelta
     max_turns: CFG.maxTurns
+    maxImages: CFG.imagesKeep
+    supportsImages: CFG.imagesVision
 
   adaSession = await openOrCreateSession adaHarness
-  await adaSession.listToolCatalog()
-  registerAdaLocalTools adaSession.agent, voiceSock: CFG.voiceSock
-  if adaSession.agent and await ensureMcpZen()
-    registerMcpZenTools adaSession.agent, policy: adaHarness.policy
-    nZen = Object.keys(adaSession.agent.tools).filter((t) -> t.startsWith 'zen_browser_').length
-    log "browser tools: direct (#{nZen} zen_browser_* on this agent)"
-  wrapToolsForUx adaSession.agent if adaSession.agent
-  log "angela tools: #{Object.keys(adaSession.agent?.tools or {}).join ', '}"
+  await setupSession adaSession
   try
     b = ctxDenominator()
     log "ctx budget: model=#{b.spec} agl=#{b.agl} server=#{b.srv} → #{b.denom}"
